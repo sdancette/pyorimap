@@ -6,8 +6,8 @@ import numpy as np
 
 from io import StringIO
 
-DTYPEf = np.float32
-DTYPEi = np.int32
+#DTYPEf = np.float32
+#DTYPEi = np.int32
 
 def load_mtex_qsym(sym='cubic', dtype=np.float32):
     """
