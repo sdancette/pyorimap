@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 # pyorimap/quaternions_np.py
 
 """
@@ -219,6 +220,10 @@ def q4_random(n=1024, dtype=np.float32):
     q4[:,2] = np.cos(t1)*r1
     q4[:,3] = np.sin(t2)*r2
 
+    # positive quaternion:
+    whr = (q4[:,0] < 0.)
+    q4[whr] *= -1
+
     return np.squeeze(q4)
 
 def q4_from_axis_angle(axis, ang, dtype=np.float32):
@@ -300,6 +305,10 @@ def q4_from_axis_angle(axis, ang, dtype=np.float32):
         logging.error("q4_from_axis_angle(): some axis vectors have a zero norm. Can't be used as to generate a quaternion.")
         raise ZeroDivisionError
     qrot[:,0] = np.cos(ang/2.0)
+
+    # positive quaternion:
+    whr = (qrot[:,0] < 0.)
+    qrot[whr] *= -1
 
     return np.squeeze(qrot)
 
@@ -426,7 +435,6 @@ def q4_from_eul(eul, dtype=np.float32):
     Examples
     --------
     >>> qarr = q4_random(n=1024)
-    >>> qarr[qarr[:,0]<0] *= -1
     >>> eul = q4_to_eul(qarr)
     >>> qback = q4_from_eul(eul)
     >>> np.allclose(qarr, qback, atol=1e-6)
