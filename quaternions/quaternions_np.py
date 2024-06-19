@@ -22,7 +22,7 @@ This module contains the following functions:
 - `mat_from_eul(eul)` - compute rotation matrix from Bunge Euler angles
 - `mat_to_eul(R)` - compute Bunge Euler angles from rotation matrix
 - `transpose_mat(R)` - transpose the array of rotation matrices
-- `q4_angle(qa, qb)` - compute the angle between `qa` and  `qb`
+- `q4_cosang2(qa, qb)` - cosine of the half angle between `qa` and `qb`
 - `q4_disori_angle(qa, qb, qsym)` - compute the disorientation angle between `qa` and  `qb` (taking symmetries into account)
 """
 
@@ -752,9 +752,9 @@ def transpose_mat(R):
 
     return Rt
 
-def q4_angle(qa, qb, dtype=np.float32):
+def q4_cosang2(qa, qb, dtype=np.float32):
     """
-    Returns the angle (degrees) between quaternions `qa` and `qb`.
+    Returns the cosine of the half angle between quaternions `qa` and `qb`.
 
     Parameters
     ----------
@@ -766,7 +766,7 @@ def q4_angle(qa, qb, dtype=np.float32):
     Returns
     -------
     ang : ndarray
-        the angle (in degrees) between quaternions `qa` and `qb`.
+        the cosine of the half angle between quaternions `qa` and `qb`.
 
     Raises
     ------
@@ -779,7 +779,8 @@ def q4_angle(qa, qb, dtype=np.float32):
     >>> ang = np.random.rand(1024)*180.
     >>> qrot = q4_from_axis_angle(np.random.rand(1024,3), ang)
     >>> qb = q4_mult(qa, qrot)
-    >>> aback = q4_angle(qa, qb)
+    >>> cosa2 = q4_cosang2(qa, qb)
+    >>> aback = np.degrees(2*np.arccos(cosa2))
     >>> np.allclose(aback, ang, atol=1e-1)
     True
     """
@@ -789,9 +790,9 @@ def q4_angle(qa, qb, dtype=np.float32):
                             qa[...,1]*qb[...,1] +
                             qa[...,2]*qb[...,2] +
                             qa[...,3]*qb[...,3]), 1.)
-    return np.degrees(2*np.arccos(ang))
+    return ang
 
-def q4_disori_angle(qa, qb, qsym, dtype=np.float32):
+def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
     """
     Disorientation angle (degrees) between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -822,13 +823,26 @@ def q4_disori_angle(qa, qb, qsym, dtype=np.float32):
     >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym)
     >>> np.allclose(ang, np.zeros(24, dtype=np.float32))
     True
+    >>> qa = q4_random(1024)
+    >>> qb = q4_random(1024)
+    >>> ang1 = q4_disori_angle(qa, qb, qsym, method=1)
+    >>> ang2 = q4_disori_angle(qa, qb, qsym, method=2)
+    >>> np.allclose(ang1, ang2, atol=1e-2)
+    True
     """
-    ang  = np.zeros(len(qa), dtype=dtype) + 99999
-    for q in qsym:
-        qc = q4_mult(qa, q)
-        ang1 = q4_angle(qc, qb)
-        ang = np.minimum(ang, ang1)
-    return ang
+    ang  = np.zeros(len(qa), dtype=dtype)
+    if method == 1:
+        # disorientation expressed in the frame of crystal a:
+        qc = q4_mult(q4_inv(qa), qb)
+        for q in qsym:
+            ang1 = q4_cosang2(qc, q)
+            ang = np.maximum(ang, ang1)
+    else:
+        for q in qsym:
+            qc = q4_mult(qa, q)
+            ang1 = q4_cosang2(qc, qb)
+            ang = np.maximum(ang, ang1)
+    return np.degrees(2*np.arccos(ang))
 
 #def XXXq4_from_mat(R, dtype=np.float32):
 #    """

@@ -86,10 +86,43 @@ def q4_mult(qa, qb):
 
     return qc
 
-@njit(float32[:](float32[:,:],float32[:,:]), fastmath=True, parallel=True)
-def q4_angle(qa, qb):
+@njit(float32[:,:](float32[:,:]), fastmath=True, parallel=False)
+def q4_inv(qarr):
     """
-    Returns the angle (degrees) between quaternions `qa` and `qb`.
+    Inverse of unit quaternion based on its conjugate.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions.
+
+    Returns
+    -------
+    qinv : ndarray
+        the conjugate of `qarr`,
+        (n, 4) array of quaternions.
+
+    Examples
+    --------
+    >>> qa = np.atleast_2d([0,1,0,0]).astype(np.float32)
+    >>> qinv = q4_inv(qa)
+    >>> np.allclose(qinv[0], np.array([0,-1,0,0], dtype=np.float32))
+    True
+    >>> qa = q4np.q4_random(n=1024)
+    >>> qinv = q4_inv(qa)
+    """
+    n = qarr.shape[0]
+    qinv = qarr.copy()
+    for i in prange(n):
+        qinv[i,1] *= -1
+        qinv[i,2] *= -1
+        qinv[i,3] *= -1
+    return qinv
+
+@njit(float32[:](float32[:,:],float32[:,:]), fastmath=True, parallel=True)
+def q4_cosang2(qa, qb):
+    """
+    Returns the cosine of the half angle between quaternions `qa` and `qb`.
 
     Parameters
     ----------
@@ -101,7 +134,7 @@ def q4_angle(qa, qb):
     Returns
     -------
     ang : ndarray
-        the angle (in degrees) between quaternions `qa` and `qb`.
+        the cosine of the half angle between quaternions `qa` and `qb`.
 
     Examples
     --------
@@ -109,8 +142,9 @@ def q4_angle(qa, qb):
     >>> ang = np.random.rand(1024)*180.
     >>> qrot = q4np.q4_from_axis_angle(np.random.rand(1024,3), ang)
     >>> qb = q4_mult(qa, qrot)
-    >>> aback = q4_angle(qa, qb)
-    >>> aback1 = q4np.q4_angle(qa, qb)
+    >>> cosa2 = q4_cosang2(qa, qb)
+    >>> aback = np.degrees(2*np.arccos(cosa2))
+    >>> aback1 = np.degrees(2*np.arccos( q4np.q4_cosang2(qa, qb) ))
     >>> np.allclose(aback, ang, atol=1e-1)
     True
     >>> np.allclose(aback, aback1, atol=1e-1)
@@ -122,28 +156,28 @@ def q4_angle(qa, qb):
     if na == nb:
         ang = np.zeros(na, dtype=np.float32)
         for i in prange(na):
-            ang[i] = 2.*np.arccos(min(abs(qa[i,0]*qb[i,0] +
-                                          qa[i,1]*qb[i,1] +
-                                          qa[i,2]*qb[i,2] +
-                                          qa[i,3]*qb[i,3]), 1.))*rad2deg
+            ang[i] = min(abs(qa[i,0]*qb[i,0] +
+                             qa[i,1]*qb[i,1] +
+                             qa[i,2]*qb[i,2] +
+                             qa[i,3]*qb[i,3]), 1.)
     elif nb == 1:
         ang = np.zeros(na, dtype=np.float32)
         for i in prange(na):
-            ang[i] = 2.*np.arccos(min(abs(qa[i,0]*qb[0,0] +
-                                          qa[i,1]*qb[0,1] +
-                                          qa[i,2]*qb[0,2] +
-                                          qa[i,3]*qb[0,3]), 1.))*rad2deg
+            ang[i] = min(abs(qa[i,0]*qb[0,0] +
+                             qa[i,1]*qb[0,1] +
+                             qa[i,2]*qb[0,2] +
+                             qa[i,3]*qb[0,3]), 1.)
     elif na == 1:
         ang = np.zeros(nb, dtype=np.float32)
         for i in prange(nb):
-            ang[i] = 2.*np.arccos(min(abs(qa[0,0]*qb[i,0] +
-                                          qa[0,1]*qb[i,1] +
-                                          qa[0,2]*qb[i,2] +
-                                          qa[0,3]*qb[i,3]), 1.))*rad2deg
+            ang[i] = min(abs(qa[0,0]*qb[i,0] +
+                             qa[0,1]*qb[i,1] +
+                             qa[0,2]*qb[i,2] +
+                             qa[0,3]*qb[i,3]), 1.)
     return ang
 
-@njit(float32[:](float32[:,:],float32[:,:],float32[:,:]), fastmath=True, parallel=True)
-def q4_disori_angle(qa, qb, qsym):
+@njit(float32[:](float32[:,:],float32[:,:],float32[:,:],int32), fastmath=True, parallel=True)
+def q4_disori_angle(qa, qb, qsym, method=1):
     """
     Disorientation angle (degrees) between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -166,10 +200,17 @@ def q4_disori_angle(qa, qb, qsym):
     >>> qa = q4np.q4_random(1)
     >>> qsym = q4np.q4_sym_cubic()
     >>> qequ = q4np.q4_mult(qa, qsym)
-    >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym)
+    >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym, method=1)
     >>> np.allclose(ang, np.zeros(24, dtype=np.float32))
     True
+    >>> qa = q4np.q4_random(1024)
+    >>> qb = q4np.q4_random(1024)
+    >>> ang1 = q4_disori_angle(qa, qb, qsym, method=1)
+    >>> ang2 = q4_disori_angle(qa, qb, qsym, method=2)
+    >>> np.allclose(ang1, ang2, atol=1e-2)
+    True
     """
+    rad2deg = 180./np.pi
     na = qa.shape[0]
     nb = qb.shape[0]
     nsym = qsym.shape[0]
@@ -177,14 +218,27 @@ def q4_disori_angle(qa, qb, qsym):
         n = na
     elif na == 1:
         n = nb
-    ang = np.zeros(n, dtype=np.float32) + 99999
+    ang = np.zeros(n, dtype=np.float32)
 
-    for i in range(nsym):
-        qc = q4_mult(qa, qsym[i:i+1,:])
-        ang1 = q4_angle(qc, qb)
-        #ang = np.minimum(ang, ang1)
-        for j in prange(n):
-            ang[j] = min(ang[j], ang1[j])
+    if method == 1:
+        # disorientation expressed in the frame of crystal a:
+        qc = q4_mult(q4_inv(qa), qb)
+        for i in range(nsym):
+            ang1 = q4_cosang2(qc, qsym[i:i+1,:]) # cosine of the half angle
+            #ang = np.maximum(ang, ang1)
+            for j in prange(n):
+                ang[j] = max(ang[j], ang1[j])
+    else:
+        for i in range(nsym):
+            qc = q4_mult(qa, qsym[i:i+1,:])
+            ang1 = q4_cosang2(qc, qb) # cosine of the half angle
+            #ang = np.maximum(ang, ang1)
+            for j in prange(n):
+                ang[j] = max(ang[j], ang1[j])
+
+    # back to angles in degrees:
+    for j in prange(n):
+        ang[j] = 2*np.arccos(ang[j])*rad2deg
     return ang
 
 
