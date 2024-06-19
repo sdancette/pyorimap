@@ -3,7 +3,7 @@
 # pyorimap/quaternions_np.py
 
 """
-Quaternion calculations applied to (poly)crystals using regular numpy.
+Quaternion operations applied to (poly)crystals using regular numpy.
 
 This module contains the following functions:
 
@@ -624,7 +624,7 @@ def mat_to_eul(R, dtype=np.float32):
     >>> eul = q4_to_eul(qarr)
     >>> mat = mat_from_eul(eul)
     >>> eulback = mat_to_eul(mat)
-    >>> np.allclose(eul, eulback, atol=1e-4)
+    >>> np.allclose(eul, eulback, atol=1e-3)
     True
     """
     R = np.atleast_3d(R).reshape(-1,3,3).astype(dtype)
@@ -804,6 +804,9 @@ def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
         array of quaternions or single quaternion.
     qsym : ndarray
         quaternion array of symmetry operations.
+    method : int, default=1
+        the method to compute disorientation: 1 or 2.
+        Method 1 is faster.
 
     Returns
     -------

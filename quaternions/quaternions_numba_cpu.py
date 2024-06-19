@@ -8,6 +8,9 @@ Quaternion operations accelerated using numba on CPU.
 This module contains the following functions:
 
 - `q4_mult(qa, qb)` - compute quaternion multiplication
+- `q4_inv(qarr)` - compute the inverse of unit quaternions
+- `q4_cosang2(qa, qb)` - cosine of the half angle between `qa` and `qb`
+- `q4_disori_angle(qa, qb, qsym)` - compute the disorientation angle between `qa` and  `qb` (taking symmetries into account)
 """
 
 import logging
@@ -189,6 +192,9 @@ def q4_disori_angle(qa, qb, qsym, method=1):
         (n, 4) array of quaternions.
     qsym : ndarray
         (n, 4) array of quaternions.
+    method : int, default=1
+        the method to compute disorientation: 1 or 2.
+        Method 1 is faster.
 
     Returns
     -------
