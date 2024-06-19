@@ -247,4 +247,7 @@ def q4_disori_angle(qa, qb, qsym, method=1):
         ang[j] = 2*np.arccos(ang[j])*rad2deg
     return ang
 
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
 

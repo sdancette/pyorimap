@@ -239,3 +239,7 @@ def q4_disori_angle(qa, qb, qc, qsym, a0, a1, method=1, revertqa=False):
             cp.maximum(a0, a1, out=a0)
     cp.arccos(a0, out=a0)
     a0 *= 2*180./cp.pi
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()

@@ -894,4 +894,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
 #
 #    return qarr
 
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
 
