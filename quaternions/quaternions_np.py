@@ -688,7 +688,9 @@ def q4_to_mat(qarr, dtype=np.float32):
 
     Notes
     -----
-    Columns of the resulting rotation matrix correspond to the unit vectors
+    When the quaternions represent rotations from the sample frame
+    to the crystal frame (as obtained for example from Bunge Euler angles),
+    the columns of the resulting rotation matrix correspond to the unit vectors
     of the sample (macroscopic) frame expressed in the crystal frame.
     The present implementation follows the conventions detailed in the documentation of the
     orilib routines by R. Quey at https://sourceforge.net/projects/orilib/.
