@@ -26,8 +26,8 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     Generate a random Voronoi microstructure as a pyvista ImageData object.
 
     Data is stored at the cell centers, so that the actual dimensions of
-    the ImageData object (which are related to the grid points, i.e. cell
-    corners) will be (dimX+1, dimY+1, dimZ+1).
+    the ImageData object (which are related to the grid points by default,
+    i.e. cell corners) will be (dimX+1, dimY+1, dimZ+1).
 
     Parameters
     ----------
@@ -95,8 +95,8 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     whr = (grid.points[:,0] < grid.bounds[1])*\
           (grid.points[:,1] < grid.bounds[3])*\
           (grid.points[:,2] < grid.bounds[5])
-    xyz = grid.points[whr]
-    if not grid.n_cells == len(xyz):
+    xyzCells = grid.points[whr]
+    if not grid.n_cells == len(xyzCells):
         logging.error("n_cells does not match with the number of calculated cell centers.")
 
     seeds = np.random.rand(ngrains,3)
@@ -105,7 +105,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     seeds[:,2] *= dimZ
 
     tree = KDTree(seeds)
-    dist, grains = tree.query(xyz)
+    dist, grains = tree.query(xyzCells)
     grid.cell_data['grain'] = grains + 1
 
     grid.cell_data['phase'] = np.ones(grid.n_cells, dtype=np.uint8)
