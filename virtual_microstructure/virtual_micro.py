@@ -91,7 +91,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
                         spacing=(spacing, spacing, spacing),
                         origin=(0, 0, 0) )
 
-    # coordinates of cell centers (from zero):
+    # coordinates of cell centers (starting at zero):
     whr = (grid.points[:,0] < grid.bounds[1])*\
           (grid.points[:,1] < grid.bounds[3])*\
           (grid.points[:,2] < grid.bounds[5])
@@ -122,7 +122,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     qseeds = q4np.q4_random(ngrains)
     eulseeds = q4np.q4_to_eul(qseeds)
 
-    qarray = np.zeros((grid.n_cells, 4), dtype=DTYPEf)
+    grid.qarray = np.zeros((grid.n_cells, 4), dtype=DTYPEf)
 
     mydtype = [('grain', 'i4'), ('phase', 'i4'), ('npix', 'i4'), ('fvol', 'f4'),
                ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4')]
@@ -130,7 +130,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     phasedata = np.rec.array(np.zeros(nphases, dtype=mydtype[1:4]))
     for igr in np.unique(grains):
         whrgr = (grains == igr)
-        qarray[whrgr] = qseeds[igr]
+        grid.qarray[whrgr] = qseeds[igr]
 
         grdata.grain[igr] = igr + 1
         grdata.phase[igr] = grid.cell_data['phase'][whrgr][0]
@@ -151,7 +151,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     np.savetxt('voro-{}-{}-{}-grains.txt'.format(dimX,dimY,dimZ), grdata,
                fmt="%6i %4i %9i %10.6f %10.3f %10.3f %10.3f", header=str(grdata.dtype.names))
 
-    grid.cell_data['eul'] = q4np.q4_to_eul(qarray)
+    grid.cell_data['eul'] = q4np.q4_to_eul(grid.qarray)
 
     grid.save('voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ))
 
