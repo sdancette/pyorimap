@@ -50,11 +50,23 @@ class Crystal:
             if (self.abc[0]==self.abc[1]): # hexagonal
                 self.sym = 'hex'
             else:
-                print("Z!! Unexpected crystal lattice")
+                logging.warning("Unexpected crystal lattice")
                 self.sym = 'none'
         else:
-            print("Z!! Unexpected crystal lattice")
             self.sym = 'none'
+            if not name == 'unindexed':
+                logging.warning("Unexpected crystal lattice")
+
+    def __str__(self):
+        return f"{self.phase}, {self.name}, {self.abc}, {self.ang}: {self.sym}"
+
+    def __repr__(self):
+        return (f"{type(self).__name__}"
+                f'(phase={self.phase}, '
+                f'name="{self.name}", '
+                f"abc={self.abc}, "
+                f"ang={self.ang}, "
+                f'sym="{self.sym}")')
 
 
 def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
@@ -118,7 +130,7 @@ def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
 
     ctfdata = np.genfromtxt(filename, skip_header=nskip, dtype=dtype)
     if ctfdata['phase'].min() == 0:
-        phase_to_crys[0] = Crystal(0, name='unindexed')
+        phase_to_crys[0] = Crystal(0, abc=[np.NaN,np.NaN,np.NaN], ang=[np.NaN,np.NaN,np.NaN], name='unindexed')
 
     # pyvista Image object:
     logging.info("Generating pyvista ImageData object.")
