@@ -16,6 +16,7 @@ import pyvista as pv
 from scipy.spatial import KDTree
 
 import quaternions_np as q4np
+import orientation_map as om
 
 DTYPEf = np.float32
 DTYPEi = np.int32
@@ -23,7 +24,8 @@ DTYPEi = np.int32
 def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
                            ngrains=5**3, phases=[1,2], fvol=None):
     """
-    Generate a random Voronoi microstructure as a pyvista ImageData object.
+    Generate a random Voronoi microstructure and return an OriMap object
+    (inheriting from pyvista ImageData object).
 
     Data is stored at the cell centers, so that the actual dimensions of
     the ImageData object (which are related to the grid points by default,
@@ -44,17 +46,13 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
 
     Returns
     -------
-    grid : vtk.vtkImageData
-        pyvista ImageData object describing the microstructure.
-
-    Raises
-    ------
-    Exception
-        If ...
+    grid : pyorimap.OriMap
+        OriMap object describing the microstructure.
 
     Notes
     -----
-    See details of pyvista.ImageData at https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.imagedata.
+    OriMap inherits from ImageData, see details of pyvista.ImageData
+    at <https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.imagedata>.
 
     Examples
     --------
@@ -87,9 +85,9 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
             logging.warning("Assumed volume fraction: {}".format(fvol))
 
     # pyvista Image object:
-    grid = pv.ImageData(dimensions=(dimX+1, dimY+1, dimZ+1),
-                        spacing=(spacing, spacing, spacing),
-                        origin=(0, 0, 0) )
+    grid = om.OriMap(dimensions=(dimX+1, dimY+1, dimZ+1),
+                     spacing=(spacing, spacing, spacing),
+                     phase_to_crys )
 
     # coordinates of cell centers (starting at zero):
     whr = (grid.points[:,0] < grid.bounds[1])*\
