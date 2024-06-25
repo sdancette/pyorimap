@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# pyorimap/orimap.py
+# pyorimap/orientation_map.py
 
 """
 Perform orientation map analysis.
@@ -14,6 +14,7 @@ import logging
 import numpy as np
 import cupy as cp
 import pyvista as pv
+from scipy import sparse
 
 import quaternions_np as q4np
 import quaternions_cp as q4cp
@@ -78,10 +79,183 @@ class Crystal:
 class OriMap(pv.ImageData):
     """
     OriMap class inheriting from pyvista ImageData.
+
+    Parameters
+    ----------
+    dimensions : array_like
+        dimensions in the X, Y, Z, directions.
+    spacing : float
+        size of each (cubic) grid point.
+    phase_to_crys : dict
+        dictionary of crystal definition for each phase label (if multiphase).
+
+    Attributes
+    ----------
+    xxx : float
+        xxx.
+
+    Methods
+    -------
+    get_neighborhood(connectivity=6)
+        Construct the array of cell neighborhood.
     """
+
     def __init__(self, dimensions=(128+1,128+1,1+1), spacing=(1,1,1), phase_to_crys={1:Crystal(1,'no_name')}):
+        """
+        """
         super().__init__(dimensions=dimensions, spacing=spacing)
         self.phase_to_crys = phase_to_crys
+
+    def get_neighborhood(self, connectivity=6):
+        """
+        Construct cell neighborhood information.
+        In 2D (dim=2), connectivity = [4 | 8].
+        In 3D (dim=3), connectivity = [6 | 26].
+        """
+        tol = np.array(self.spacing, dtype=DTYPEf).min()/100.
+        whr = (self.points[:,0] < self.bounds[1]-tol)*(self.points[:,1] < self.bounds[3]-tol)*(self.points[:,2] < self.bounds[5]-tol)
+        xyz = self.points[whr]
+        x = xyz[:,0]; y = xyz[:,1]; z = xyz[:,2]
+        dx, dy, dz = self.spacing
+        nn = self.n_cells
+
+        # assessing 2D or 3D:
+        if self.dimensions[2]-1 > 1:
+            dim = 3
+            if connectivity not in [6,26]:
+                connectivity = 6
+                logging.warning("Forcing connectivity to 6 (direct cell neighbors in 3D).")
+        else:
+            dim = 2
+            if connectivity not in [4,8]:
+                connectivity = 4
+                logging.warning("Forcing connectivity to 4 (direct cell neighbors in 2D).")
+
+        mydtype = [('icel', 'i4'), ('ineb', 'i4'), ('itype', 'i2'), ('order', 'u1'), ('val', 'f4')]
+        self.neighborhood = np.rec.array( np.zeros(nn*int(connectivity / 2), dtype=mydtype) )
+        icells = np.arange(0, nn, dtype=np.int32)
+
+        # East-West:
+        n1 = 0; n2 = nn
+        self.neighborhood.icel[n1:n2] = icells
+        self.neighborhood.ineb[n1:n2] = xyz_to_index(x+dx, y, z, mode='cells', grid=self)
+        self.neighborhood.itype[n1:n2] = 1
+        self.neighborhood.order[n1:n2] = 1
+
+        # North-South:
+        n1 = nn; n2 = 2*nn
+        self.neighborhood.icel[n1:n2] = icells
+        self.neighborhood.ineb[n1:n2] = xyz_to_index(x, y+dy, z, mode='cells', grid=self)
+        self.neighborhood.itype[n1:n2] = 2
+        self.neighborhood.order[n1:n2] = 1
+
+        if dim == 3:
+            # Bottom-Top:
+            n1 = 2*nn; n2 = 3*nn
+            self.neighborhood.icel[n1:n2] = icells
+            self.neighborhood.ineb[n1:n2] = xyz_to_index(x, y, z+dz, mode='cells', grid=self)
+            self.neighborhood.itype[n1:n2] = 3
+            self.neighborhood.order[n1:n2] = 1
+
+        if connectivity >= 8:
+            # 2D, in plane diagonal neighbors:
+            # South-East
+            if dim == 2:
+                n1 = 2*nn; n2 = 3*nn
+            else:
+                n1 = 3*nn; n2 = 4*nn
+            self.neighborhood.icel[n1:n2] = icells
+            self.neighborhood.ineb[n1:n2] = xyz_to_index(x+dx, y+dy, z, mode='cells', grid=self)
+            self.neighborhood.itype[n1:n2] = 4
+            self.neighborhood.order[n1:n2] = 2
+
+            # South-West
+            if dim == 2:
+                n1 = 3*nn; n2 = 4*nn
+            else:
+                n1 = 4*nn; n2 = 5*nn
+            self.neighborhood.icel[n1:n2] = icells
+            self.neighborhood.ineb[n1:n2] = xyz_to_index(x-dx, y+dy, z, mode='cells', grid=self)
+            self.neighborhood.itype[n1:n2] = 5
+            self.neighborhood.order[n1:n2] = 2
+
+        if connectivity == 26:
+            # Bottom-East
+            pass
+
+            # Bottom-West
+            pass
+
+            # Bottom-North
+            pass
+
+            # Bottom-South
+            pass
+
+            # 4 cube diagonals
+            pass
+
+        whr = (self.neighborhood.ineb >= 0)*(self.neighborhood.ineb < nn)
+        self.neighborhood = self.neighborhood[whr]
+
+    def compute_neighbor_disori(self, mode='numba_cpu'):
+        """
+        Compute the disorientation between neighboring cells.
+        """
+        try:
+            ncrys = len(self.qarray)
+        except AttributeError:
+            self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+
+        try:
+            nneb = len(self.neighborhood)
+        except AttributeError:
+            logging.warning("Computing neighborhood with direct cell connectivity. Compute neighborhood behorehand for greater control.")
+            if self.dimensions[2]-1 > 1: # 3D
+                self.get_neighborhood(connectivity=6)
+            else: # 2D
+                self.get_neighborhood(connectivity=4)
+
+        logging.info("Starting to compute neighbor disorientation.")
+        for phi in self.phase_to_crys.keys():
+            # restrict neighborhood to identical phase on the 2 sides:
+            phase = self.cell_data['phase']
+            icel = self.neighborhood.icel
+            ineb = self.neighborhood.ineb
+            whr = (phase[icel] == phi) * (phase[icel] == phase[ineb])
+
+            if phi > 0:
+                qa = self.qarray[icel[whr]]
+                qb = self.qarray[ineb[whr]]
+                try:
+                    qsym = self.phase_to_crys[phi].qsym
+                except AttributeError:
+                    self.phase_to_crys[phi].infer_symmetry()
+                    self.phase_to_crys[phi].get_qsym()
+                    qsym = self.phase_to_crys[phi].qsym
+
+                self.neighborhood.val[whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+
+            elif phi == 0:
+                self.neighborhood.val[whr] = -99
+        logging.info("Finished to compute neighbor disorientation.")
+
+    def sparse_connected_components(self, thres=10.):
+        """
+        Compute the connected components based on cell neighborhood.
+        """
+        ll = self.n_cells
+        whr = (self.neighborhood.val < thres)
+        ipix2 = np.append(self.neighborhood.icel[whr], self.neighborhood.ineb[whr], axis=0)
+        ineb2 = np.append(self.neighborhood.ineb[whr], self.neighborhood.icel[whr], axis=0)
+        val2 = np.tile(self.neighborhood.val[whr], 2)
+
+        A = sparse.csr_array((val2, (ipix2, ineb2)),
+                             shape=(ll,ll), dtype=np.float32)
+
+        ncomp, labels = sparse.csgraph.connected_components(A, directed=False, return_labels=True)
+
+        self.cell_data['grains'] = labels + 1 # starting at 1 instead of 0
 
 
 def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
@@ -90,7 +264,7 @@ def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
                                    ('MAD', 'f4'), ('BC', 'i2'), ('BS', 'i2')]):
     """
     Read a ascii .ctf file and return an OriMap object
-    (inheriting from pyvista ImageData object) with data stored at the cell centers.
+    with data stored at the cell centers.
     """
     logging.info("Starting to read header in {}".format(filename))
     nlinemax = 30
@@ -143,6 +317,7 @@ def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
         name = data[2]
         crys = Crystal(phase, name, abc, ang)
         crys.infer_symmetry()
+        crys.get_qsym()
         phase_to_crys[phase] = crys
 
     logging.info("Starting to read data from{}".format(filename))
@@ -154,7 +329,7 @@ def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
     # pyvista Image object:
     logging.info("Generating pyvista ImageData object.")
 
-    orimap = OriMap((XCells+1, YCells+1, 2), (XStep, YStep, 1),
+    orimap = OriMap((XCells+1, YCells+1, 2), (XStep, YStep, max(XStep, YStep)),
                     phase_to_crys )
     orimap.cell_data['phase'] = ctfdata['phase']
     orimap.cell_data['Bands'] = ctfdata['Bands']
@@ -171,3 +346,40 @@ def read_from_ctf(filename, dtype=[('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'),
 
     return orimap
 
+def xyz_to_index(x, y, z, grid, mode='cells'):
+    """
+    Return the cell/point indices in the grid from (x,y,z) coordinates.
+    """
+    if mode == 'cells':
+        nx, ny, nz = grid.dimensions[0]-1, grid.dimensions[1]-1, grid.dimensions[2]-1
+    elif mode == 'points':
+        nx, ny, nz = grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]
+    dx, dy, dz = grid.spacing
+    ox, oy, oz = grid.bounds[0], grid.bounds[2], grid.bounds[4]
+
+    checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
+
+    a = np.int32(np.round((z-oz)/dz)*nx*ny)
+    b = np.int32(np.round((y-oy)/dy)*nx)
+    c = np.int32(np.round((x-ox)/dx))
+    ii = a + b + c
+    ii[~checkxyz] = -99999
+    return ii
+
+def index_to_xyz(ii, grid, mode='cells'):
+    """
+    Return (x,y,z) coordinates in the grid from cell/point indices.
+    """
+    if mode == 'cells':
+        nx, ny, nz = grid.dimensions[0]-1, grid.dimensions[1]-1, grid.dimensions[2]-1
+    elif mode == 'points':
+        nx, ny, nz = grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]
+    dx, dy, dz = grid.spacing
+    ox, oy, oz = grid.bounds[0], grid.bounds[2], grid.bounds[4]
+
+    quo1, rem1 = np.divmod(ii, nx*ny)
+    z = quo1*dz + oz
+    quo2, rem2 = np.divmod(rem1, nx)
+    y = quo2*dy + oy
+    x = rem2*dx + ox
+    return np.column_stack((x,y,z))

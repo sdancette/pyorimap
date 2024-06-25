@@ -22,7 +22,7 @@ DTYPEf = np.float32
 DTYPEi = np.int32
 
 def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
-                           ngrains=5**3, phases=[1,2], fvol=None):
+                           ngrains=5**3, phases=[1,2], fvol=None, phase_to_crys=None):
     """
     Generate a random Voronoi microstructure and return an OriMap object
     (inheriting from pyvista ImageData object).
@@ -41,8 +41,10 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
         number of grains.
     phases : int or array_like
         phase labels.
-    fvol : float, default=None
+    fvol : dict or None, default=None
         dictionary of volume fractions for each phase label (if multiphase).
+    phase_to_crys : dict or None, default=None
+        dictionary of crystal definition for each phase label (if multiphase).
 
     Returns
     -------
@@ -67,6 +69,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
 
     # check consistent phase input:
     if nphases > 1:
+        # volume fraction:
         homogeneous = True
         if isinstance(fvol, dict):
             keys = np.sort( np.array( list(fvol.keys()) ) )
@@ -84,10 +87,28 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
                 fvol[phase] = f
             logging.warning("Assumed volume fraction: {}".format(fvol))
 
+        # crystal definition:
+        propercrys = True
+        if isinstance(phase_to_crys, dict):
+            keys = np.sort( np.array( list(phase_to_crys.keys()) ) )
+            if np.allclose(phases, keys):
+                logging.info("Crystal definitions: {}".format(phase_to_crys))
+            else:
+                propercrys = False
+                logging.warning("Crystal dictionary not specified properly. Default crystals will be attributed to the phases.")
+        else:
+            propercrys = False
+            logging.warning("Crystal dictionary not specified. Default crystals will be attributed to the phases.")
+        if not propercrys:
+            phase_to_crys = dict()
+            for iphase, phase in enumerate(phases):
+                phase_to_crys[phase] = om.Crystal(phase, name='phase'+str(phase))
+            logging.info("Crystal definitions: {}".format(phase_to_crys))
+
     # pyvista Image object:
-    grid = om.OriMap(dimensions=(dimX+1, dimY+1, dimZ+1),
-                     spacing=(spacing, spacing, spacing),
-                     phase_to_crys )
+    grid = om.OriMap((dimX+1, dimY+1, dimZ+1),
+                     (spacing, spacing, spacing),
+                     phase_to_crys)
 
     # coordinates of cell centers (starting at zero):
     whr = (grid.points[:,0] < grid.bounds[1])*\
