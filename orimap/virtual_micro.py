@@ -21,8 +21,7 @@ import orientation_map as om
 DTYPEf = np.float32
 DTYPEi = np.int32
 
-def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
-                           ngrains=5**3, phases=[1,2], fvol=None, phase_to_crys=None):
+def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[1,2], fvol=None, phase_to_crys=None):
     """
     Generate a random Voronoi microstructure and return an OriMap object
     (inheriting from pyvista ImageData object).
@@ -61,6 +60,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     >>> mic = Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[0,1,2,4], fvol={0:0.15, 1:0.4, 2:0.4, 4:0.05})
     >>> mic = Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[1,5])
     """
+    logging.info("#### Starting to build virtual microstructure. ####")
 
     dimX = dimensions[0]; dimY = dimensions[1]; dimZ = dimensions[2]
     phases = np.atleast_1d(phases).astype(np.uint8)
@@ -91,9 +91,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
         propercrys = True
         if isinstance(phase_to_crys, dict):
             keys = np.sort( np.array( list(phase_to_crys.keys()) ) )
-            if np.allclose(phases, keys):
-                logging.info("Crystal definitions: {}".format(phase_to_crys))
-            else:
+            if not np.allclose(phases, keys):
                 propercrys = False
                 logging.warning("Crystal dictionary not specified properly. Default crystals will be attributed to the phases.")
         else:
@@ -103,10 +101,14 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
             phase_to_crys = dict()
             for iphase, phase in enumerate(phases):
                 phase_to_crys[phase] = om.Crystal(phase, name='phase'+str(phase))
-            logging.info("Crystal definitions: {}".format(phase_to_crys))
+                phase_to_crys[phase].infer_symmetry()
+                logging.info("{}".format(phase_to_crys[phase]))
+        else:
+            for iphase, phase in enumerate(phases):
+                logging.info("{}".format(phase_to_crys[phase]))
 
     # pyvista Image object:
-    grid = om.OriMap((dimX+1, dimY+1, dimZ+1),
+    grid = om.OriMap(None, (dimX+1, dimY+1, dimZ+1),
                      (spacing, spacing, spacing),
                      phase_to_crys)
 
@@ -123,9 +125,11 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
     seeds[:,1] *= dimY
     seeds[:,2] *= dimZ
 
+    logging.info("Starting to compute KDTree.")
     tree = KDTree(seeds)
     dist, grains = tree.query(xyzCells)
     grid.cell_data['grain'] = grains + 1
+    logging.info("Finished to compute KDTree.")
 
     grid.cell_data['phase'] = np.ones(grid.n_cells, dtype=np.uint8)
     if nphases > 1:
@@ -172,7 +176,12 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1,
 
     grid.cell_data['eul'] = q4np.q4_to_eul(grid.qarray)
 
-    grid.save('voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ))
+    filename = 'voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ)
+    grid.filename = filename
+    grid.save(filename)
+    grid.save_phase_info()
+
+    logging.info("#### Finished to build virtual microstructure. ####")
 
     return grid
 
