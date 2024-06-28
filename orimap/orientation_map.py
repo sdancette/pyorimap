@@ -496,6 +496,7 @@ def read_from_ctf(filename, dtype=None):
 
     orimap = OriMap(None, (XCells+1, YCells+1, 2), (XStep, YStep, max(XStep, YStep)),
                     phase_to_crys )
+
     orimap.cell_data['phase'] = ctfdata['phase']
     orimap.cell_data['Bands'] = ctfdata['Bands']
     orimap.cell_data['Error'] = ctfdata['Error']
@@ -544,7 +545,7 @@ def read_from_vtk(filename):
     return orimap
 
 
-def xyz_to_index(x, y, z, grid, mode='cells'):
+def xyz_to_index(x, y, z, grid, mode='cells', method=1):
     """
     Return the cell/point indices in the grid from (x,y,z) coordinates.
 
@@ -557,20 +558,29 @@ def xyz_to_index(x, y, z, grid, mode='cells'):
     dx, dy, dz = grid.spacing
     ox, oy, oz = grid.bounds[0], grid.bounds[2], grid.bounds[4]
 
+    x = np.int32(np.round((x-ox)/dx))
+    y = np.int32(np.round((y-oy)/dy))
+    z = np.int32(np.round((z-oz)/dz))
     checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
 
-    a = np.int32(np.round((z-oz)/dz)*nx*ny)
-    b = np.int32(np.round((y-oy)/dy)*nx)
-    c = np.int32(np.round((x-ox)/dx))
-    ii = a + b + c
-    ii[~checkxyz] = -99999
+    if method == 1:
+        z *= nx*ny
+        y *= nx
+        ii = z + y + x
+        ii[~checkxyz] = -99999
+    else:
+        ii = np.zeros(len(x), dtype=np.int32) - 99999
+        x = x[checkxyz]
+        y = y[checkxyz]
+        z = z[checkxyz]
+        ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
     return ii
 
 def index_to_xyz(ii, grid, mode='cells'):
     """
     Return (x,y,z) coordinates in the grid from cell/point indices.
 
-    ...To be compared for efficiency with np.unravel_index()...
+    ...To be compared for efficiency with z,y,x = np.unravel_index(flat, (nz,ny,nx))...
     """
     if mode == 'cells':
         nx, ny, nz = grid.dimensions[0]-1, grid.dimensions[1]-1, grid.dimensions[2]-1

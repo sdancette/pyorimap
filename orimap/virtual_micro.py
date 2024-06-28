@@ -67,6 +67,10 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     phases.sort()
     nphases = len(phases)
 
+    ############################################################################################
+    # default generation of microstructure with a single phase (phases anf fvol not explicitly specifies) needs to be checked
+    ############################################################################################
+
     # check consistent phase input:
     if nphases > 1:
         # volume fraction:
@@ -113,12 +117,13 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
                      phase_to_crys)
 
     # coordinates of cell centers (starting at zero):
-    whr = (grid.points[:,0] < grid.bounds[1])*\
-          (grid.points[:,1] < grid.bounds[3])*\
-          (grid.points[:,2] < grid.bounds[5])
+    tol = np.array(grid.spacing, dtype=DTYPEf).min()/100.
+    whr = (grid.points[:,0] < grid.bounds[1]-tol)*\
+          (grid.points[:,1] < grid.bounds[3]-tol)*\
+          (grid.points[:,2] < grid.bounds[5]-tol)
     xyzCells = grid.points[whr]
     if not grid.n_cells == len(xyzCells):
-        logging.error("n_cells does not match with the number of calculated cell centers.")
+        logging.error("n_cells does not match with the number of calculated cell centers: {}, {}.".format(grid.n_cells, len(xyzCells)))
 
     seeds = np.random.rand(ngrains,3)
     seeds[:,0] *= dimX
@@ -151,18 +156,17 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
                ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4')]
     grdata = np.rec.array(np.zeros(ngrains, dtype=mydtype))
     phasedata = np.rec.array(np.zeros(nphases, dtype=mydtype[1:4]))
-    for igr in np.unique(grains):
-        whrgr = (grains == igr)
-        grid.qarray[whrgr] = qseeds[igr]
 
-        grdata.grain[igr] = igr + 1
-        grdata.phase[igr] = grid.cell_data['phase'][whrgr][0]
-        nnn = np.sum(whrgr)
-        grdata.npix[igr] = nnn
-        grdata.fvol[igr] = float(nnn)/grid.n_cells
-        grdata.phi1[igr] = eulseeds[igr,0]
-        grdata.Phi[igr]  = eulseeds[igr,1]
-        grdata.phi2[igr] = eulseeds[igr,2]
+    unic, indices, counts = np.unique(grains, return_index=True, return_counts=True)
+    grid.qarray = qseeds[grains,:]
+
+    grdata.grain = unic + 1
+    grdata.phase = grid.cell_data['phase'][indices]
+    grdata.npix = counts
+    grdata.fvol = counts.astype(np.float32)/grid.n_cells
+    grdata.phi1 = eulseeds[:,0]
+    grdata.Phi  = eulseeds[:,1]
+    grdata.phi2 = eulseeds[:,2]
 
     for iphase, phase in enumerate(phases):
         phasedata.phase[iphase] = phase
