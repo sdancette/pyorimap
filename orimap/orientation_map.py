@@ -315,9 +315,39 @@ class OriMap(pv.ImageData):
 
         ncomp, labels = sparse.csgraph.connected_components(A, directed=False, return_labels=True)
 
-        self.cell_data['grains'] = labels + 1 # starting at 1 instead of 0
+        self.cell_data['region'] = labels + 1 # starting at 1 instead of 0
 
         logging.info("Finished to compute {} connected components.".format(ncomp))
+
+    def filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
+        """
+        Relabel grains in a consecutive sequence after the exclusion of regions outside of ncell_range and phase_range.
+        """
+        phase = self.cell_data['phase']
+        region = self.cell_data['region']
+
+        # first, exclusion of regions outside of phase_min and phase_max:
+        whr = (phase < phimin) + (phase >= phimax)
+        region[whr] = 0
+        unic, indices, counts = np.unique(region, return_inverse=True, return_counts=True)
+
+        # then exclusion of regions outside of npix_min and npix_max:
+        toremove = (counts < nmin) + (counts >= nmax)
+        unic[toremove] = 0
+        region = unic[indices]
+        # re-run the counting:
+        unic, indices, counts = np.unique(region, return_inverse=True, return_counts=True)
+
+        # redefine the unique grain label in a consecutive sequence:
+        newu = np.arange(len(unic))
+        if unic.min() == 0:
+            self.cell_data['grains'] = newu[indices] # preserve '0' region with label 0
+        elif unic.min() >= 1:
+            self.cell_data['grains'] = newu[indices]+1 # there is no region outside of the specified ranges, start labeling at 1
+        # final count:
+        unic, counts = np.unique(self.cell_data['grains'], return_counts=True)
+
+        return unic, counts
 
     def save_phase_info(self):
         """
@@ -364,14 +394,14 @@ class OriMap(pv.ImageData):
             self.phase_to_crys[1] = Crystal(1, name='phase1', sym='cubic')
             self.cell_data['phase'] = 1
         else:
-            mydtype=[('name', 'U15'), ('phase', 'i2'), ('sym', 'U10'),
+            mydtype=[('name', 'U15'), ('phase', 'u1'), ('sym', 'U10'),
                     ('a', 'f4'), ('b', 'f4'), ('c', 'f4'),
                     ('alpha', 'f4'), ('beta', 'f4'), ('gamma', 'f4')]
 
             readPhase = True
             try:
                 phases = np.rec.array(np.genfromtxt(f, delimiter=',', dtype=mydtype))
-                if not np.allclose(phases.phase.sort(), thephases):
+                if not np.allclose(np.sort(phases.phase), thephases):
                     readPhase = False
                     logging.error("Phase IDs do not match in cell_data['phase'] and {}: {}, {}".format(f, thephases, phases.phase))
             except FileNotFoundError:
