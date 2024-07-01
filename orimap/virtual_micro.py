@@ -57,8 +57,8 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
 
     Examples
     --------
-    >>> mic = Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[0,1,2,4], fvol={0:0.15, 1:0.4, 2:0.4, 4:0.05})
-    >>> mic = Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[1,5])
+    >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, phases=[0,1,2,4], fvol={0:0.15, 1:0.4, 2:0.4, 4:0.05})
+    >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, phases=5)
     """
     logging.info("#### Starting to build virtual microstructure. ####")
 
@@ -91,25 +91,26 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
                 fvol[phase] = f
             logging.warning("Assumed volume fraction: {}".format(fvol))
 
-        # crystal definition:
-        propercrys = True
-        if isinstance(phase_to_crys, dict):
-            keys = np.sort( np.array( list(phase_to_crys.keys()) ) )
-            if not np.allclose(phases, keys):
-                propercrys = False
-                logging.warning("Crystal dictionary not specified properly. Default crystals will be attributed to the phases.")
-        else:
+    # check crystal definition:
+    propercrys = True
+    if isinstance(phase_to_crys, dict):
+        keys = np.sort( np.array( list(phase_to_crys.keys()) ) )
+        if not np.allclose(phases, keys):
             propercrys = False
-            logging.warning("Crystal dictionary not specified. Default crystals will be attributed to the phases.")
-        if not propercrys:
-            phase_to_crys = dict()
-            for iphase, phase in enumerate(phases):
-                phase_to_crys[phase] = om.Crystal(phase, name='phase'+str(phase))
-                phase_to_crys[phase].infer_symmetry()
-                logging.info("{}".format(phase_to_crys[phase]))
-        else:
-            for iphase, phase in enumerate(phases):
-                logging.info("{}".format(phase_to_crys[phase]))
+            logging.warning("Crystal dictionary not specified properly. Default crystals will be attributed to the phases.")
+    else:
+        propercrys = False
+        logging.warning("Crystal dictionary not specified. Default crystals will be attributed to the phases.")
+
+    if not propercrys:
+        phase_to_crys = dict()
+        for iphase, phase in enumerate(phases):
+            phase_to_crys[phase] = om.Crystal(phase, name='phase'+str(phase))
+            phase_to_crys[phase].infer_symmetry()
+            logging.info("{}".format(phase_to_crys[phase]))
+    else:
+        for iphase, phase in enumerate(phases):
+            logging.info("{}".format(phase_to_crys[phase]))
 
     # pyvista Image object:
     grid = om.OriMap(None, (dimX+1, dimY+1, dimZ+1),
@@ -133,7 +134,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     logging.info("Starting to compute KDTree.")
     tree = KDTree(seeds)
     dist, grains = tree.query(xyzCells)
-    grid.cell_data['grain'] = grains + 1
+    grid.cell_data['grain'] = grains.astype(DTYPEi) + 1
     logging.info("Finished to compute KDTree.")
 
     grid.cell_data['phase'] = np.ones(grid.n_cells, dtype=np.uint8)
@@ -147,17 +148,24 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
             whr = (grains>=grange[0])*(grains<grange[1])
             grid.cell_data['phase'][whr] = phase
 
-    qseeds = q4np.q4_random(ngrains)
-    eulseeds = q4np.q4_to_eul(qseeds)
-
     grid.qarray = np.zeros((grid.n_cells, 4), dtype=DTYPEf)
 
     mydtype = [('grain', 'i4'), ('phase', 'i4'), ('npix', 'i4'), ('fvol', 'f4'),
                ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4')]
-    grdata = np.rec.array(np.zeros(ngrains, dtype=mydtype))
-    phasedata = np.rec.array(np.zeros(nphases, dtype=mydtype[1:4]))
 
-    unic, indices, counts = np.unique(grains, return_index=True, return_counts=True)
+    unic, indices, rindices, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
+
+    #grdata = np.rec.array(np.zeros(ngrains, dtype=mydtype))
+    grdata = np.rec.array(np.zeros(len(unic), dtype=mydtype))
+    phasedata = np.rec.array(np.zeros(nphases, dtype=mydtype[1:4]))
+    if len(unic) < ngrains:
+        logging.warning("The number of unique grain {} is smaller than the number of initial seeds {}.".format(len(unic), ngrains))
+        ngrains = len(unic)
+        newu = np.arange(ngrains)
+        grains = newu[rindices]
+
+    qseeds = q4np.q4_random(ngrains)
+    eulseeds = q4np.q4_to_eul(qseeds)
     grid.qarray = qseeds[grains,:]
 
     grdata.grain = unic + 1

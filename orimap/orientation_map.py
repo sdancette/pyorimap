@@ -14,6 +14,7 @@ import logging
 import numpy as np
 import cupy as cp
 import pyvista as pv
+import skimage as sk
 from scipy import sparse
 
 import quaternions_np as q4np
@@ -34,8 +35,8 @@ DTYPEi = np.int32
 class Crystal:
     phase: int = 1
     name: str = 'no_name'
-    abc: np.ndarray[(int,), np.dtype[np.float32]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=np.float32))
-    ang: np.ndarray[(int,), np.dtype[np.float32]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=np.float32)*90)
+    abc: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf))
+    ang: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf)*90)
     sym: str = 'none'
 
     def infer_symmetry(self):
@@ -76,9 +77,56 @@ class Crystal:
         else:
             logging.warning("No quaternion symmetry operator implemented for crystal {self.sym}.")
 
+class StructuringElement:
+    """
+    Structuring Element of given radius and connectivity.
+
+    Parameters
+    ----------
+    radius : int, default: 1
+        Radius of the structuring element.
+    connectivity : str, default: 'face'
+        Type of connectivity ('face', 'edge' or 'vertice').
+    dim : int
+        Dimension of the underlying grid.
+    """
+
+    def __init__(self, radius=1, connectivity='face', dim=3):
+        logging.info("Generating structuring element with radius {} and {}-type connectivity in dimension {}.".format(radius, connectivity, dim))
+
+        self.r = radius
+        self.connec = connectivity
+        self.dim = dim
+
+        if self.connec == 'face':
+            self.selem = sk.morphology.ball(self.r).astype(np.uint8)
+        else: # full connectivity including edge and vertice neighbors
+            w = 2*self.r + 1
+            self.selem = np.ones((w,w,w), dtype=np.uint8)
+
+        dxyz = np.column_stack(np.nonzero(self.selem))[:,::-1] - self.r # equivalent to np.column_stack(np.where(selem>0)) - r
+        # restrict to neighbors in 1 of the 2 opposite directions
+        # (relation in the other direction will be evaluated from the other cell):
+        nneb = int((len(dxyz)-1)/2)
+        dxyz = dxyz[nneb+1:]
+
+        if self.dim == 2:
+            # keep only in-plane neighbors (at the same 'z' position):
+            dxyz = dxyz[dxyz[:,2]==0]
+            self.selem = self.selem[self.r]
+
+        self.dxyz = dxyz
+        self.nneb = len(dxyz)
+        logging.info("selem: {}".format(self.selem))
+        logging.info("Relative position of neighbors: {}.".format(self.dxyz))
+        logging.info("Half-number of neighbors to be considered: {}.".format(self.nneb))
+
+
 class OriMap(pv.ImageData):
     """
     OriMap class (inheriting from pyvista ImageData).
+
+    Data is stored at the cell centers (as cell_data) by default rather than at the vertices.
 
     Parameters
     ----------
@@ -110,7 +158,177 @@ class OriMap(pv.ImageData):
         self.phase_to_crys = phase_to_crys
         self.filename = 'no_name.vtk'
 
-    def get_neighborhood(self, connectivity=6):
+        # assessing 2D or 3D:
+        if self.dimensions[2]-1 > 1:
+            self.dim3D = True
+        else:
+            self.dim3D = False
+
+    def xyz_to_index(self, x, y, z, mode='cells', method=1):
+        """
+        Return the cell/point indices in the grid from (x,y,z) coordinates.
+        """
+        if mode == 'cells':
+            nx, ny, nz = self.dimensions[0]-1, self.dimensions[1]-1, self.dimensions[2]-1
+        elif mode == 'points':
+            nx, ny, nz = self.dimensions[0], self.dimensions[1], self.dimensions[2]
+        dx, dy, dz = self.spacing
+        ox, oy, oz = self.bounds[0], self.bounds[2], self.bounds[4]
+
+        x = np.round((x-ox)/dx).astype(DTYPEi)
+        y = np.round((y-oy)/dy).astype(DTYPEi)
+        z = np.round((z-oz)/dz).astype(DTYPEi)
+        checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
+
+        if method == 1:
+            z *= nx*ny
+            y *= nx
+            ii = z + y + x
+            ii[~checkxyz] = -1
+        else:
+            ii = np.zeros(len(x), dtype=DTYPEi) - 1
+            x = x[checkxyz]
+            y = y[checkxyz]
+            z = z[checkxyz]
+            ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
+        return ii
+
+    def index_to_xyz(self, ii, mode='cells', method=1):
+        """
+        Return (x,y,z) coordinates in the grid from cell/point indices.
+        """
+        if mode == 'cells':
+            nx, ny, nz = self.dimensions[0]-1, self.dimensions[1]-1, self.dimensions[2]-1
+        elif mode == 'points':
+            nx, ny, nz = self.dimensions[0], self.dimensions[1], self.dimensions[2]
+        dx, dy, dz = self.spacing
+        ox, oy, oz = self.bounds[0], self.bounds[2], self.bounds[4]
+
+        if method == 1:
+            quo1, rem1 = np.divmod(ii, nx*ny)
+            z = quo1*dz + oz
+            quo2, rem2 = np.divmod(rem1, nx)
+            y = quo2*dy + oy
+            x = rem2*dx + ox
+        else:
+            z,y,x = np.unravel_index(ii, (nz,ny,nx))
+            z = z*dz + oz
+            y = y*dy + oy
+            x = x*dx + ox
+
+        return np.column_stack((x,y,z)).astype(DTYPEf)
+
+    def get_neighborhood(self, radius=1, connectivity='face'):
+        """
+        Get neighbors with given connectivity and corresponding disorientation.
+        """
+        logging.info("Starting to retrieve neighbors with {} connectivity and radius {}.".format(connectivity, radius))
+
+        # get the coordinates of the cells (dimensions - 1 wrt the points):
+        tol = np.array(self.spacing, dtype=DTYPEf).min()/100.
+        self.whrC = (self.points[:,0] < self.bounds[1]-tol)*\
+                    (self.points[:,1] < self.bounds[3]-tol)*\
+                    (self.points[:,2] < self.bounds[5]-tol)
+        xyzC = self.points[self.whrC]
+        #x = xyzC[:,0]; y = xyzC[:,1]; z = xyzC[:,2]
+        dx, dy, dz = self.spacing
+        nn = self.n_cells
+
+        # structuring element to define the connectivity of cells:
+        dim = 3 if self.dim3D else 2
+        self.selem = StructuringElement(radius, connectivity, dim)
+
+        # loop over the different types of neighbors defined by the structuring element:
+        cellid = np.arange(nn).astype(DTYPEi)
+        self.deso = np.zeros((nn,self.selem.nneb), dtype=DTYPEf) + 3000.
+        self.neighbors = np.zeros((nn,self.selem.nneb), dtype=DTYPEi)
+
+        logging.info("Starting to compute neighbor disorientation.")
+
+        for ineb, dxyz in enumerate(self.selem.dxyz):
+            self.neighbors[:,ineb] = self.get_neighbors_for_ineb(xyzC, dxyz, ineb)
+
+            self.get_disori_for_ineb(cellid, ineb, mode='numba_cpu')
+
+        logging.info("Finished to compute neighbor disorientation.")
+
+    def build_cell_graph(self, thres=10., symmetric=False):
+        """
+        Build the graph of cell connections as a scipy.sparse csr_array.
+        """
+        logging.info("Starting to build cell graph.")
+
+        nn = self.n_cells
+        cellid = np.arange(nn).astype(DTYPEi)
+
+        whr = np.where((self.neighbors >= 0)*(self.deso < thres))
+        self.Adjmat = sparse.csr_array((self.deso[whr], (cellid[whr[0]], self.neighbors[whr])),
+                                       shape=(nn,nn), dtype=DTYPEf)
+        if symmetric:
+            self.Adjmat += self.Adjmat.T
+
+        logging.info("Finished to build cell graph.")
+
+    def get_connected_components(self):
+        """
+        Get the connected components based on given threshold.
+        """
+        ncomp, labels = sparse.csgraph.connected_components(self.Adjmat, directed=False, return_labels=True)
+
+        self.cell_data['region'] = labels + 1 # starting at 1 instead of 0
+
+        logging.info("Finished to compute {} connected components.".format(ncomp))
+
+    def get_neighbors_for_ineb(self, xyzC, dxyz, ineb):
+        """
+        Construct cell neighborhood information for the ineb_th family of neighbors.
+        """
+
+        dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
+        z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
+
+        ii = self.xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
+        return ii
+
+    def get_disori_for_ineb(self, icel, ineb, mode='numba_cpu'):
+        """
+        Compute the disorientation with the ineb_th family of neighbors.
+        NB1: disorientation is initialized at +3000. for cell neighbors outside of the grid bounds.
+        NB2: disorientation is initialized at +2000. for cell neighbors belonging to different phases.
+        NB3: disorientation is initialized at -1. for cell neighbors belonging to phase 0 (unindexed by default).
+        """
+        phase = self.cell_data['phase']
+
+        neighb = self.neighbors[:,ineb]
+        # restrict to existing neighbors, i.e. within the bounds of the grid:
+        whrNeb = (neighb >= 0)
+
+        try:
+            ncrys = len(self.qarray)
+        except AttributeError:
+            self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+
+        self.deso[:,ineb][whrNeb] = 2000.
+        for phi in self.phase_to_crys.keys():
+            # restrict neighborhood to existing neighbors and identical phase on the 2 sides:
+            whr = whrNeb * (phase[icel] == phi) * (phase[icel] == phase[neighb])
+
+            if phi > 0:
+                qa = self.qarray[icel[whr]]
+                qb = self.qarray[neighb[whr]]
+                try:
+                    qsym = self.phase_to_crys[phi].qsym
+                except AttributeError:
+                    self.phase_to_crys[phi].infer_symmetry()
+                    self.phase_to_crys[phi].get_qsym()
+                    qsym = self.phase_to_crys[phi].qsym
+
+                self.deso[:,ineb][whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+
+            elif phi == 0:
+                self.deso[:,ineb][whr] = -1.
+
+    def get_neighborhood0(self, connectivity=6):
         """
         Construct cell neighborhood information.
         In 2D (dim=2), connectivity = [4 | 8].
@@ -139,7 +357,7 @@ class OriMap(pv.ImageData):
 
         mydtype = [('icel', 'i4'), ('ineb', 'i4'), ('itype', 'i2'), ('order', 'u1'), ('val', 'f4')]
         self.neighborhood = np.rec.array( np.zeros(nn*int(connectivity / 2), dtype=mydtype) )
-        icells = np.arange(0, nn, dtype=np.int32)
+        icells = np.arange(0, nn, dtype=DTYPEi)
 
         # East:
         n1 = 0; n2 = nn; itype = 1
@@ -249,7 +467,7 @@ class OriMap(pv.ImageData):
 
         logging.info("Finished to construct cell neighborhood.")
 
-    def compute_neighbor_disori(self, mode='numba_cpu'):
+    def compute_neighbor_disori0(self, mode='numba_cpu'):
         """
         Compute the disorientation between neighboring cells.
         """
@@ -263,9 +481,9 @@ class OriMap(pv.ImageData):
         except AttributeError:
             logging.warning("Computing neighborhood with direct cell connectivity. Compute neighborhood behorehand for greater control.")
             if self.dimensions[2]-1 > 1: # 3D
-                self.get_neighborhood(connectivity=6)
+                self.get_neighborhood0(connectivity=6)
             else: # 2D
-                self.get_neighborhood(connectivity=4)
+                self.get_neighborhood0(connectivity=4)
 
         phase = self.cell_data['phase']
         icel = self.neighborhood.icel
@@ -304,14 +522,14 @@ class OriMap(pv.ImageData):
 
         logging.info("Starting to build neighbor graph.")
 
-        # restrict neighborhood to threshold value and identical phased on the sides
+        # restrict neighborhood to threshold value and identical phase on the 2 sides
         whr = (val < thres)*(phase[icel] == phase[ineb])#*(phase[icel] > 0)
         ipix2 = np.append(self.neighborhood.icel[whr], self.neighborhood.ineb[whr], axis=0)
         ineb2 = np.append(self.neighborhood.ineb[whr], self.neighborhood.icel[whr], axis=0)
         val2 = np.tile(self.neighborhood.val[whr], 2)
 
         A = sparse.csr_array((val2, (ipix2, ineb2)),
-                             shape=(ll,ll), dtype=np.float32)
+                             shape=(ll,ll), dtype=DTYPEf)
 
         ncomp, labels = sparse.csgraph.connected_components(A, directed=False, return_labels=True)
 
@@ -383,7 +601,7 @@ class OriMap(pv.ImageData):
 
         nophasedata = True
         try:
-            thephases = np.unique(self.cell_data['phase'])
+            thephases = np.atleast_1d( np.unique(self.cell_data['phase']) )
             nophasedata = False
         except KeyError:
             logging.warning("Phase data wasn't found within available cell_data keys: {}".format(self.cell_data.keys()))
@@ -400,7 +618,7 @@ class OriMap(pv.ImageData):
 
             readPhase = True
             try:
-                phases = np.rec.array(np.genfromtxt(f, delimiter=',', dtype=mydtype))
+                phases = np.atleast_1d(np.rec.array(np.genfromtxt(f, delimiter=',', dtype=mydtype)))
                 if not np.allclose(np.sort(phases.phase), thephases):
                     readPhase = False
                     logging.error("Phase IDs do not match in cell_data['phase'] and {}: {}, {}".format(f, thephases, phases.phase))
@@ -545,53 +763,3 @@ def read_from_vtk(filename):
     return orimap
 
 
-def xyz_to_index(x, y, z, grid, mode='cells', method=1):
-    """
-    Return the cell/point indices in the grid from (x,y,z) coordinates.
-
-    ...To be compared for efficiency with np.ravel_multi_index()...
-    """
-    if mode == 'cells':
-        nx, ny, nz = grid.dimensions[0]-1, grid.dimensions[1]-1, grid.dimensions[2]-1
-    elif mode == 'points':
-        nx, ny, nz = grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]
-    dx, dy, dz = grid.spacing
-    ox, oy, oz = grid.bounds[0], grid.bounds[2], grid.bounds[4]
-
-    x = np.int32(np.round((x-ox)/dx))
-    y = np.int32(np.round((y-oy)/dy))
-    z = np.int32(np.round((z-oz)/dz))
-    checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
-
-    if method == 1:
-        z *= nx*ny
-        y *= nx
-        ii = z + y + x
-        ii[~checkxyz] = -99999
-    else:
-        ii = np.zeros(len(x), dtype=np.int32) - 99999
-        x = x[checkxyz]
-        y = y[checkxyz]
-        z = z[checkxyz]
-        ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
-    return ii
-
-def index_to_xyz(ii, grid, mode='cells'):
-    """
-    Return (x,y,z) coordinates in the grid from cell/point indices.
-
-    ...To be compared for efficiency with z,y,x = np.unravel_index(flat, (nz,ny,nx))...
-    """
-    if mode == 'cells':
-        nx, ny, nz = grid.dimensions[0]-1, grid.dimensions[1]-1, grid.dimensions[2]-1
-    elif mode == 'points':
-        nx, ny, nz = grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]
-    dx, dy, dz = grid.spacing
-    ox, oy, oz = grid.bounds[0], grid.bounds[2], grid.bounds[4]
-
-    quo1, rem1 = np.divmod(ii, nx*ny)
-    z = quo1*dz + oz
-    quo2, rem2 = np.divmod(rem1, nx)
-    y = quo2*dy + oy
-    x = rem2*dx + ox
-    return np.column_stack((x,y,z))
