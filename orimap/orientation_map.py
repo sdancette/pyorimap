@@ -32,6 +32,11 @@ DTYPEf = np.float32
 DTYPEi = np.int32
 
 @dataclass
+class OriMapParams:
+    phase: int = 1
+    filename: str = 'no_name'
+
+@dataclass
 class Crystal:
     phase: int = 1
     name: str = 'no_name'
@@ -121,7 +126,6 @@ class StructuringElement:
         logging.info("Relative position of neighbors: {}.".format(self.dxyz))
         logging.info("Half-number of neighbors to be considered: {}.".format(self.nneb))
 
-
 class OriMap(pv.ImageData):
     """
     OriMap class (inheriting from pyvista ImageData).
@@ -147,7 +151,7 @@ class OriMap(pv.ImageData):
 
     Methods
     -------
-    get_neighborhood(connectivity=6)
+    _get_neighborhood(connectivity=6)
         Construct the array of cell neighborhood.
     """
 
@@ -164,7 +168,22 @@ class OriMap(pv.ImageData):
         else:
             self.dim3D = False
 
-    def xyz_to_index(self, x, y, z, mode='cells', method=1):
+    def get_grains(self, thres=10., nmin=1, radius=1, connectivity='face', method='graph'):
+        """
+        Compute grains based on disorientation with cell neighbors.
+
+        Cell neighborhood is defined by a structuring element
+        with the input `radius` and `connectivity`.
+        """
+        self._get_neighborhood(radius, connectivity)
+
+        if method=='graph':
+            self._build_cell_graph(thres, symmetric=False)
+            self._get_connected_components()
+            self._filter_grains(nmin=nmin, phimin=1)
+        self.save('out.vtk')
+
+    def _xyz_to_index(self, x, y, z, mode='cells', method=1):
         """
         Return the cell/point indices in the grid from (x,y,z) coordinates.
         """
@@ -193,7 +212,7 @@ class OriMap(pv.ImageData):
             ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
         return ii
 
-    def index_to_xyz(self, ii, mode='cells', method=1):
+    def _index_to_xyz(self, ii, mode='cells', method=1):
         """
         Return (x,y,z) coordinates in the grid from cell/point indices.
         """
@@ -218,19 +237,30 @@ class OriMap(pv.ImageData):
 
         return np.column_stack((x,y,z)).astype(DTYPEf)
 
-    def get_neighborhood(self, radius=1, connectivity='face'):
+    def _get_cell_coords_from_points(self, method=1):
+        """
+        Get cell coordinates from the coordinates of cell vertices.
+
+        Note: amounts to removing the last slice/row/col in (gridded) image data.
+        """
+        if method == 1:
+            tol = np.array(self.spacing, dtype=DTYPEf).min()/100.
+            self.whrC = (self.points[:,0] < self.bounds[1]-tol)*\
+                        (self.points[:,1] < self.bounds[3]-tol)*\
+                        (self.points[:,2] < self.bounds[5]-tol)
+            return self.points[self.whrC]
+        else:
+            # construct the point mask explicitely for faster access
+            pass
+
+    def _get_neighborhood(self, radius=1, connectivity='face'):
         """
         Get neighbors with given connectivity and corresponding disorientation.
         """
         logging.info("Starting to retrieve neighbors with {} connectivity and radius {}.".format(connectivity, radius))
 
         # get the coordinates of the cells (dimensions - 1 wrt the points):
-        tol = np.array(self.spacing, dtype=DTYPEf).min()/100.
-        self.whrC = (self.points[:,0] < self.bounds[1]-tol)*\
-                    (self.points[:,1] < self.bounds[3]-tol)*\
-                    (self.points[:,2] < self.bounds[5]-tol)
-        xyzC = self.points[self.whrC]
-        #x = xyzC[:,0]; y = xyzC[:,1]; z = xyzC[:,2]
+        xyzC = self._get_cell_coords_from_points(method=1)
         dx, dy, dz = self.spacing
         nn = self.n_cells
 
@@ -238,48 +268,22 @@ class OriMap(pv.ImageData):
         dim = 3 if self.dim3D else 2
         self.selem = StructuringElement(radius, connectivity, dim)
 
-        # loop over the different types of neighbors defined by the structuring element:
         cellid = np.arange(nn).astype(DTYPEi)
         self.deso = np.zeros((nn,self.selem.nneb), dtype=DTYPEf) + 3000.
         self.neighbors = np.zeros((nn,self.selem.nneb), dtype=DTYPEi)
 
         logging.info("Starting to compute neighbor disorientation.")
 
+        # loop over the different types of neighbors defined by the structuring element:
         for ineb, dxyz in enumerate(self.selem.dxyz):
-            self.neighbors[:,ineb] = self.get_neighbors_for_ineb(xyzC, dxyz, ineb)
+            logging.info("... ineb {}".format(ineb))
+            self.neighbors[:,ineb] = self._get_neighbors_for_ineb(xyzC, dxyz, ineb)
 
-            self.get_disori_for_ineb(cellid, ineb, mode='numba_cpu')
+            self._get_disori_for_ineb(cellid, ineb, mode='numba_cpu')
 
         logging.info("Finished to compute neighbor disorientation.")
 
-    def build_cell_graph(self, thres=10., symmetric=False):
-        """
-        Build the graph of cell connections as a scipy.sparse csr_array.
-        """
-        logging.info("Starting to build cell graph.")
-
-        nn = self.n_cells
-        cellid = np.arange(nn).astype(DTYPEi)
-
-        whr = np.where((self.neighbors >= 0)*(self.deso < thres))
-        self.Adjmat = sparse.csr_array((self.deso[whr], (cellid[whr[0]], self.neighbors[whr])),
-                                       shape=(nn,nn), dtype=DTYPEf)
-        if symmetric:
-            self.Adjmat += self.Adjmat.T
-
-        logging.info("Finished to build cell graph.")
-
-    def get_connected_components(self):
-        """
-        Get the connected components based on given threshold.
-        """
-        ncomp, labels = sparse.csgraph.connected_components(self.Adjmat, directed=False, return_labels=True)
-
-        self.cell_data['region'] = labels + 1 # starting at 1 instead of 0
-
-        logging.info("Finished to compute {} connected components.".format(ncomp))
-
-    def get_neighbors_for_ineb(self, xyzC, dxyz, ineb):
+    def _get_neighbors_for_ineb(self, xyzC, dxyz, ineb):
         """
         Construct cell neighborhood information for the ineb_th family of neighbors.
         """
@@ -287,10 +291,10 @@ class OriMap(pv.ImageData):
         dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
         z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
 
-        ii = self.xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
+        ii = self._xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
         return ii
 
-    def get_disori_for_ineb(self, icel, ineb, mode='numba_cpu'):
+    def _get_disori_for_ineb(self, icel, ineb, mode='numba_cpu'):
         """
         Compute the disorientation with the ineb_th family of neighbors.
         NB1: disorientation is initialized at +3000. for cell neighbors outside of the grid bounds.
@@ -310,7 +314,7 @@ class OriMap(pv.ImageData):
 
         self.deso[:,ineb][whrNeb] = 2000.
         for phi in self.phase_to_crys.keys():
-            # restrict neighborhood to existing neighbors and identical phase on the 2 sides:
+            # restrict neighborhood to existing neighbors AND identical phase on the 2 sides:
             whr = whrNeb * (phase[icel] == phi) * (phase[icel] == phase[neighb])
 
             if phi > 0:
@@ -328,7 +332,34 @@ class OriMap(pv.ImageData):
             elif phi == 0:
                 self.deso[:,ineb][whr] = -1.
 
-    def filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
+    def _get_connected_components(self):
+        """
+        Get the connected components based on given threshold.
+        """
+        ncomp, labels = sparse.csgraph.connected_components(self.Adjmat, directed=False, return_labels=True)
+
+        self.cell_data['region'] = labels + 1 # starting at 1 instead of 0
+
+        logging.info("Finished to compute {} connected components.".format(ncomp))
+
+    def _build_cell_graph(self, thres=10., symmetric=False):
+        """
+        Build the graph of cell connections as a scipy.sparse csr_array.
+        """
+        logging.info("Starting to build cell graph.")
+
+        nn = self.n_cells
+        cellid = np.arange(nn).astype(DTYPEi)
+
+        whr = np.where((self.neighbors >= 0)*(self.deso < thres))
+        self.Adjmat = sparse.csr_array((self.deso[whr], (cellid[whr[0]], self.neighbors[whr])),
+                                       shape=(nn,nn), dtype=DTYPEf)
+        if symmetric:
+            self.Adjmat += self.Adjmat.T
+
+        logging.info("Finished to build cell graph.")
+
+    def _filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
         """
         Relabel grains in a consecutive sequence after the exclusion of regions outside of ncell_range and phase_range.
         """
@@ -356,9 +387,11 @@ class OriMap(pv.ImageData):
         # final count:
         unic, counts = np.unique(self.cell_data['grains'], return_counts=True)
 
+        logging.info("Finished to relabel {} grains with min size {} and min phase {}.".format(unic.max(), nmin, phimin))
+
         return unic, counts
 
-    def save_phase_info(self):
+    def _save_phase_info(self):
         """
         Save the properties of individual phases and crystals to .phi file.
         """
@@ -383,7 +416,7 @@ class OriMap(pv.ImageData):
         filename = self.filename[:-4]+'.phi'
         np.savetxt(filename, crys, delimiter=',', fmt=fmt, header=str(crys.dtype.names)[1:-1])
 
-    def read_phase_info(self, f=None):
+    def _read_phase_info(self, f=None):
         """
         Read the properties of individual phases and crystals from .phi file.
         """
@@ -519,7 +552,7 @@ def read_from_ctf(filename, dtype=None):
     fvtk = filename[:-4]+'.vtk'
     logging.info("Saving vtk file: {}".format(fvtk))
     orimap.save(fvtk)
-    orimap.save_phase_info()
+    orimap._save_phase_info()
 
     return orimap
 
@@ -531,7 +564,7 @@ def read_from_vtk(filename):
 
     orimap = OriMap(uinput=filename, phase_to_crys={})
     orimap.filename = filename
-    orimap.read_phase_info()
+    orimap._read_phase_info()
 
     phases = np.unique(orimap.cell_data['phase'])
     # crystal definition:

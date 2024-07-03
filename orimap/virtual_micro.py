@@ -191,7 +191,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     filename = 'voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ)
     grid.filename = filename
     grid.save(filename)
-    grid.save_phase_info()
+    grid._save_phase_info()
 
     logging.info("#### Finished to build virtual microstructure. ####")
 
