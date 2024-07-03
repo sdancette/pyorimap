@@ -23,6 +23,7 @@ import quaternions_numba_cpu as q4nc
 import virtual_micro as vmic
 
 from dataclasses import dataclass, field
+from typing import List, Tuple
 from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_structured
 
 #logging.basicConfig(filename='orimap.log', level=logging.INFO, format='%(asctime)s %(message)s')
@@ -31,17 +32,96 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 DTYPEf = np.float32
 DTYPEi = np.int32
 
+class StructuringElement:
+    """
+    Structuring Element of given radius and connectivity.
+
+    Parameters
+    ----------
+    radius : int, default: 1
+        Radius of the structuring element.
+    connectivity : str, default: 'face'
+        Type of connectivity ('face', 'edge' or 'vertice').
+    dim : int
+        Dimension of the underlying grid.
+    """
+
+    def __init__(self):
+        self.radius = None
+        self.connectivity = None
+        self.dim = None
+
+    def set_selem(self, radius=1, connectivity='face', dim=3):
+        #logging.info("Generating structuring element with radius {} and {}-type connectivity in dimension {}.".format(radius, connectivity, dim))
+
+        self.radius = radius
+        self.connectivity = connectivity
+        self.dim = dim
+
+        if self.connectivity == 'face':
+            self.selem = sk.morphology.ball(self.radius).astype(np.uint8)
+        else: # full connectivity including edge and vertice neighbors
+            w = 2*self.radius + 1
+            self.selem = np.ones((w,w,w), dtype=np.uint8)
+
+        dxyz = np.column_stack(np.nonzero(self.selem))[:,::-1] - self.radius # equivalent to np.column_stack(np.where(selem>0)) - r
+        # restrict to neighbors in 1 of the 2 opposite directions
+        # (relation in the other direction will be evaluated from the other cell):
+        nneb = int((len(dxyz)-1)/2)
+        dxyz = dxyz[nneb+1:]
+
+        if self.dim == 2:
+            # keep only in-plane neighbors (at the same 'z' position):
+            dxyz = dxyz[dxyz[:,2]==0]
+            self.selem = self.selem[self.radius]
+
+        self.dxyz = dxyz
+        self.nneb = len(dxyz)
+        #logging.info("selem: {}".format(self.selem))
+        #logging.info("Relative position of neighbors: {}.".format(self.dxyz))
+        #logging.info("Half-number of neighbors to be considered: {}.".format(self.nneb))
+
+    def __str__(self):
+        return f"{self.radius}, {self.connectivity}, {self.dim}: {self.nneb}, {self.dxyz}"
+
+    def __repr__(self):
+        return (f"{type(self).__name__}"
+                f'(radius={self.radius}, '
+                f'connectivity="{self.connectivity}", '
+                f"dimension={self.dim}, "
+                f"half-number of neighbors={self.nneb}, "
+                f'relative position of neighbors="{self.dxyz}")')
+
+selem_default = StructuringElement()
+selem_default.set_selem(radius=1, connectivity='face', dim=3)
+
 @dataclass
-class OriMapParams:
-    phase: int = 1
-    filename: str = 'no_name'
+class OriMapParameters:
+    filename: str = 'themap.vtk'
+    dimensions: Tuple[int, int, int] = (32, 32, 32)
+    spacing: Tuple[float, float, float] = (1., 1., 1.)
+    origin: Tuple[float, float, float] = (0., 0., 0.)
+    phases: List[int] = field(default_factory=lambda: [1])
+    phase_to_crys: dict = field(default_factory= lambda: {1: Crystal(1, 'phase1')})
+    selem: StructuringElement = field(default_factory=lambda: selem_default)
+    thres_HAGB: float = 10.
+    thres_LAGB: float = 1.
+    grain_cluster_method: str = 'graph'
+    grain_size_bounds: List[int] = field(default_factory=lambda: [1, 2**31])
+    grain_phase_bounds: List[int] = field(default_factory=lambda: [1, 255])
+    dim3D: bool = True
+    #grain_size_bounds: Tuple[int, int] = (1, 2**31)
+    #grain_phase_bounds: Tuple[int, int] = (1, 255)
+    #phases: np.ndarray[(int,), np.dtype[DTYPEi]] = field(default_factory=lambda: np.array([1]))
 
 @dataclass
 class Crystal:
     phase: int = 1
     name: str = 'no_name'
-    abc: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf))
-    ang: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf)*90)
+    #abc: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf))
+    #ang: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,), dtype=DTYPEf)*90)
+    abc: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,)))
+    ang: np.ndarray[(int,), np.dtype[DTYPEf]] = field(default_factory=lambda: np.ones(shape=(3,))*90)
     sym: str = 'none'
 
     def infer_symmetry(self):
@@ -82,50 +162,6 @@ class Crystal:
         else:
             logging.warning("No quaternion symmetry operator implemented for crystal {self.sym}.")
 
-class StructuringElement:
-    """
-    Structuring Element of given radius and connectivity.
-
-    Parameters
-    ----------
-    radius : int, default: 1
-        Radius of the structuring element.
-    connectivity : str, default: 'face'
-        Type of connectivity ('face', 'edge' or 'vertice').
-    dim : int
-        Dimension of the underlying grid.
-    """
-
-    def __init__(self, radius=1, connectivity='face', dim=3):
-        logging.info("Generating structuring element with radius {} and {}-type connectivity in dimension {}.".format(radius, connectivity, dim))
-
-        self.r = radius
-        self.connec = connectivity
-        self.dim = dim
-
-        if self.connec == 'face':
-            self.selem = sk.morphology.ball(self.r).astype(np.uint8)
-        else: # full connectivity including edge and vertice neighbors
-            w = 2*self.r + 1
-            self.selem = np.ones((w,w,w), dtype=np.uint8)
-
-        dxyz = np.column_stack(np.nonzero(self.selem))[:,::-1] - self.r # equivalent to np.column_stack(np.where(selem>0)) - r
-        # restrict to neighbors in 1 of the 2 opposite directions
-        # (relation in the other direction will be evaluated from the other cell):
-        nneb = int((len(dxyz)-1)/2)
-        dxyz = dxyz[nneb+1:]
-
-        if self.dim == 2:
-            # keep only in-plane neighbors (at the same 'z' position):
-            dxyz = dxyz[dxyz[:,2]==0]
-            self.selem = self.selem[self.r]
-
-        self.dxyz = dxyz
-        self.nneb = len(dxyz)
-        logging.info("selem: {}".format(self.selem))
-        logging.info("Relative position of neighbors: {}.".format(self.dxyz))
-        logging.info("Half-number of neighbors to be considered: {}.".format(self.nneb))
-
 class OriMap(pv.ImageData):
     """
     OriMap class (inheriting from pyvista ImageData).
@@ -136,7 +172,7 @@ class OriMap(pv.ImageData):
     ----------
     uinput : str, vtk.vtkImageData, pyvista.ImageData, optional
         Filename or dataset to initialize the uniform grid from.
-        If set, dimensions and spacing are ignored.
+        If set, dimensions, spacing and origin parameters are ignored.
     dimensions : sequence[int], optional
         Dimensions of the uniform grid in the (X, Y, Z) directions.
     spacing : sequence[float], default: (1.0, 1.0, 1.0)
@@ -151,37 +187,50 @@ class OriMap(pv.ImageData):
 
     Methods
     -------
-    _get_neighborhood(connectivity=6)
-        Construct the array of cell neighborhood.
+    get_grains(params)
+        Detect grains based on cell neighborhood.
     """
 
-    def __init__(self, uinput=None, dimensions=None, spacing=(1.,1.,1.), phase_to_crys={}):
-        """
-        """
-        super().__init__(uinput, dimensions=dimensions, spacing=spacing)
-        self.phase_to_crys = phase_to_crys
-        self.filename = 'no_name.vtk'
+    def __init__(self, uinput=None, params=OriMapParameters()):
+        self.params = params
+        super().__init__(uinput,
+                         dimensions=self.params.dimensions,
+                         spacing=self.params.spacing,
+                         origin=self.params.origin)
+
+        # force params update based on the vtk file parameters if directly provided by the user:
+        if not uinput is None:
+            logging.info("Updating parameters based on vtk file properties.")
+            self.params.dimensions = self.dimensions
+            self.params.spacing = self.spacing
+            self.params.origin = self.origin
 
         # assessing 2D or 3D:
-        if self.dimensions[2]-1 > 1:
-            self.dim3D = True
-        else:
-            self.dim3D = False
+        if self.params.dimensions[2]-1 > 1: # 3D map
+            self.params.dim3D = True
+        else: # 2D map, check if dim3D and selem attributes need to be updated:
+            if self.params.dim3D:
+                self.params.dim3D = False
+                # structuring element needs to be simplified for 2D:
+                logging.info("Simplifying structuring element for 2D.")
+                r = self.params.selem.radius; connec = self.params.selem.connectivity
+                self.params.selem.set_selem(r, connec, dim=2)
 
-    def get_grains(self, thres=10., nmin=1, radius=1, connectivity='face', method='graph'):
+    #def get_grains(self, thres=10., nmin=1, radius=1, connectivity='face', method='graph'):
+    def get_grains(self):
         """
         Compute grains based on disorientation with cell neighbors.
 
         Cell neighborhood is defined by a structuring element
         with the input `radius` and `connectivity`.
         """
-        self._get_neighborhood(radius, connectivity)
+        self._get_neighborhood()
 
-        if method=='graph':
-            self._build_cell_graph(thres, symmetric=False)
+        if self.params.grain_cluster_method == 'graph':
+            self._build_cell_graph(symmetric=False)
             self._get_connected_components()
-            self._filter_grains(nmin=nmin, phimin=1)
-        self.save('out.vtk')
+            self._filter_grains()
+        self.save(self.params.filename[:-4]+'.vtk')
 
     def _xyz_to_index(self, x, y, z, mode='cells', method=1):
         """
@@ -253,29 +302,26 @@ class OriMap(pv.ImageData):
             # construct the point mask explicitely for faster access
             pass
 
-    def _get_neighborhood(self, radius=1, connectivity='face'):
+    #def _get_neighborhood(self, radius=1, connectivity='face'):
+    def _get_neighborhood(self):
         """
         Get neighbors with given connectivity and corresponding disorientation.
         """
-        logging.info("Starting to retrieve neighbors with {} connectivity and radius {}.".format(connectivity, radius))
+        logging.info("Starting to retrieve neighbors with {} connectivity and radius {}.".format(self.params.selem.connectivity, self.params.selem.radius))
 
         # get the coordinates of the cells (dimensions - 1 wrt the points):
         xyzC = self._get_cell_coords_from_points(method=1)
         dx, dy, dz = self.spacing
         nn = self.n_cells
 
-        # structuring element to define the connectivity of cells:
-        dim = 3 if self.dim3D else 2
-        self.selem = StructuringElement(radius, connectivity, dim)
-
         cellid = np.arange(nn).astype(DTYPEi)
-        self.deso = np.zeros((nn,self.selem.nneb), dtype=DTYPEf) + 3000.
-        self.neighbors = np.zeros((nn,self.selem.nneb), dtype=DTYPEi)
+        self.deso = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEf) + 3000.
+        self.neighbors = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEi)
 
         logging.info("Starting to compute neighbor disorientation.")
 
         # loop over the different types of neighbors defined by the structuring element:
-        for ineb, dxyz in enumerate(self.selem.dxyz):
+        for ineb, dxyz in enumerate(self.params.selem.dxyz):
             logging.info("... ineb {}".format(ineb))
             self.neighbors[:,ineb] = self._get_neighbors_for_ineb(xyzC, dxyz, ineb)
 
@@ -313,7 +359,7 @@ class OriMap(pv.ImageData):
             self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
 
         self.deso[:,ineb][whrNeb] = 2000.
-        for phi in self.phase_to_crys.keys():
+        for phi in self.params.phase_to_crys.keys():
             # restrict neighborhood to existing neighbors AND identical phase on the 2 sides:
             whr = whrNeb * (phase[icel] == phi) * (phase[icel] == phase[neighb])
 
@@ -321,11 +367,11 @@ class OriMap(pv.ImageData):
                 qa = self.qarray[icel[whr]]
                 qb = self.qarray[neighb[whr]]
                 try:
-                    qsym = self.phase_to_crys[phi].qsym
+                    qsym = self.params.phase_to_crys[phi].qsym
                 except AttributeError:
-                    self.phase_to_crys[phi].infer_symmetry()
-                    self.phase_to_crys[phi].get_qsym()
-                    qsym = self.phase_to_crys[phi].qsym
+                    self.params.phase_to_crys[phi].infer_symmetry()
+                    self.params.phase_to_crys[phi].get_qsym()
+                    qsym = self.params.phase_to_crys[phi].qsym
 
                 self.deso[:,ineb][whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
 
@@ -342,16 +388,17 @@ class OriMap(pv.ImageData):
 
         logging.info("Finished to compute {} connected components.".format(ncomp))
 
-    def _build_cell_graph(self, thres=10., symmetric=False):
+    #def _build_cell_graph(self, thres=10., symmetric=False):
+    def _build_cell_graph(self, symmetric=False):
         """
         Build the graph of cell connections as a scipy.sparse csr_array.
         """
-        logging.info("Starting to build cell graph.")
+        logging.info("Starting to build cell graph with {} deg threshold for HAGB.".format(self.params.thres_HAGB))
 
         nn = self.n_cells
         cellid = np.arange(nn).astype(DTYPEi)
 
-        whr = np.where((self.neighbors >= 0)*(self.deso < thres))
+        whr = np.where((self.neighbors >= 0)*(self.deso < self.params.thres_HAGB))
         self.Adjmat = sparse.csr_array((self.deso[whr], (cellid[whr[0]], self.neighbors[whr])),
                                        shape=(nn,nn), dtype=DTYPEf)
         if symmetric:
@@ -359,10 +406,13 @@ class OriMap(pv.ImageData):
 
         logging.info("Finished to build cell graph.")
 
-    def _filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
+    #def _filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
+    def _filter_grains(self):
         """
         Relabel grains in a consecutive sequence after the exclusion of regions outside of ncell_range and phase_range.
         """
+        nmin = self.params.grain_size_bounds[0]; nmax = self.params.grain_size_bounds[1]
+        phimin = self.params.grain_phase_bounds[0]; phimax = self.params.grain_phase_bounds[1]
         phase = self.cell_data['phase']
         region = self.cell_data['region']
 
@@ -396,7 +446,7 @@ class OriMap(pv.ImageData):
         Save the properties of individual phases and crystals to .phi file.
         """
         try:
-            phases = list(self.phase_to_crys.keys())
+            phases = list(self.params.phase_to_crys.keys())
         except AttributeError:
             logging.error("No phase data to save.")
 
@@ -408,12 +458,12 @@ class OriMap(pv.ImageData):
                '%6.1f', '%6.1f', '%6.1f']
         crys = []
         for phi in sorted(phases):
-            thephase = self.phase_to_crys[phi]
+            thephase = self.params.phase_to_crys[phi]
             crys.append( (thephase.name, thephase.phase, thephase.sym,
                           thephase.abc[0], thephase.abc[1], thephase.abc[2],
                           thephase.ang[0], thephase.ang[1], thephase.ang[2]) )
         crys = np.array(crys, dtype=mydtype)
-        filename = self.filename[:-4]+'.phi'
+        filename = self.params.filename[:-4]+'.phi'
         np.savetxt(filename, crys, delimiter=',', fmt=fmt, header=str(crys.dtype.names)[1:-1])
 
     def _read_phase_info(self, f=None):
@@ -421,7 +471,7 @@ class OriMap(pv.ImageData):
         Read the properties of individual phases and crystals from .phi file.
         """
         if f is None:
-            f = self.filename[:-4]+'.phi'
+            f = self.params.filename[:-4]+'.phi'
 
         nophasedata = True
         try:
@@ -433,7 +483,7 @@ class OriMap(pv.ImageData):
 
         if nophasedata:
             logging.warning("Assuming homogeneous 'phase1' with cubic symmetry for the whole microstructure.")
-            self.phase_to_crys[1] = Crystal(1, name='phase1', sym='cubic')
+            self.params.phase_to_crys[1] = Crystal(1, name='phase1', sym='cubic')
             self.cell_data['phase'] = 1
         else:
             mydtype=[('name', 'U15'), ('phase', 'u1'), ('sym', 'U10'),
@@ -452,14 +502,16 @@ class OriMap(pv.ImageData):
 
             #self.phase_to_crys = dict()
             if readPhase:
+                self.params.phases = list(phases)
                 for phi in phases:
-                    self.phase_to_crys[phi.phase] = Crystal(phi.phase, name=phi.name, sym=phi.sym,
+                    self.params.phase_to_crys[phi.phase] = Crystal(phi.phase, name=phi.name, sym=phi.sym,
                                                             abc=np.array([phi.a,phi.b,phi.c,]),
                                                             ang=np.array([phi.alpha,phi.beta,phi.gamma,]))
             else:
                 logging.warning("Assuming cubic symmetry for all phases ({}).".format(thephases))
+                self.params.phases = list(thephases)
                 for phi in thephases:
-                    self.phase_to_crys[phi] = Crystal(phi, name='phase'+str(phi), sym='cubic')
+                    self.params.phase_to_crys[phi] = Crystal(phi, name='phase'+str(phi), sym='cubic')
 
 def read_from_ctf(filename, dtype=None):
     """
@@ -536,8 +588,22 @@ def read_from_ctf(filename, dtype=None):
     # pyvista Image object:
     logging.info("Generating pyvista ImageData object.")
 
-    orimap = OriMap(None, (XCells+1, YCells+1, 2), (XStep, YStep, max(XStep, YStep)),
-                    phase_to_crys )
+    selem = StructuringElement()
+    selem.set_selem(radius=1, connectivity='face', dim=2)
+    params = OriMapParameters(filename=filename,
+                              dimensions=(XCells+1, YCells+1, 2),
+                              spacing=(XStep, YStep, max(XStep, YStep)),
+                              phases=list(phase_to_crys.keys()),
+                              phase_to_crys=phase_to_crys,
+                              selem=selem,
+                              dim3D=False)
+    params.JobMode = JobMode
+    params.AcqE1 = AcqE1
+    params.AcqE2 = AcqE2
+    params.AcqE3 = AcqE3
+    params.EulerFrame = EulerFrame
+
+    orimap = OriMap(None, params)
 
     orimap.cell_data['phase'] = ctfdata['phase']
     orimap.cell_data['Bands'] = ctfdata['Bands']
@@ -548,7 +614,6 @@ def read_from_ctf(filename, dtype=None):
     orimap.cell_data['eul'] = structured_to_unstructured(ctfdata[['phi1', 'Phi', 'phi2']])
     orimap.qarray = q4np.q4_from_eul(orimap.cell_data['eul'])
 
-    orimap.filename = filename
     fvtk = filename[:-4]+'.vtk'
     logging.info("Saving vtk file: {}".format(fvtk))
     orimap.save(fvtk)
@@ -562,25 +627,26 @@ def read_from_vtk(filename):
     """
     logging.info("Reading data from {}.".format(filename))
 
-    orimap = OriMap(uinput=filename, phase_to_crys={})
-    orimap.filename = filename
+    params = OriMapParameters(filename=filename)
+
+    orimap = OriMap(uinput=filename, params=params)
     orimap._read_phase_info()
 
     phases = np.unique(orimap.cell_data['phase'])
     # crystal definition:
     propercrys = True
-    keys = np.sort( np.array( list(orimap.phase_to_crys.keys()) ) )
+    keys = np.sort( np.array( list(orimap.params.phase_to_crys.keys()) ) )
     if not np.allclose(phases, keys):
         propercrys = False
         logging.warning("Crystal dictionary not specified properly. Default crystals will be attributed to the phases.")
 
     if not propercrys:
         for iphase, phase in enumerate(phases):
-            orimap.phase_to_crys[phase] = Crystal(phase, name='phase'+str(phase))
-            logging.info("{}".format(orimap.phase_to_crys[phase]))
+            orimap.params.phase_to_crys[phase] = Crystal(phase, name='phase'+str(phase))
+            logging.info("{}".format(orimap.params.phase_to_crys[phase]))
     else:
         for iphase, phase in enumerate(phases):
-            logging.info("{}".format(orimap.phase_to_crys[phase]))
+            logging.info("{}".format(orimap.params.phase_to_crys[phase]))
 
     logging.info("Finished reading from {}.".format(filename))
 

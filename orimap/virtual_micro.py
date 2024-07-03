@@ -107,15 +107,24 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
         for iphase, phase in enumerate(phases):
             phase_to_crys[phase] = om.Crystal(phase, name='phase'+str(phase))
             phase_to_crys[phase].infer_symmetry()
+            phase_to_crys[phase].get_qsym()
             logging.info("{}".format(phase_to_crys[phase]))
     else:
         for iphase, phase in enumerate(phases):
             logging.info("{}".format(phase_to_crys[phase]))
 
     # pyvista Image object:
-    grid = om.OriMap(None, (dimX+1, dimY+1, dimZ+1),
-                     (spacing, spacing, spacing),
-                     phase_to_crys)
+    filename = 'voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ)
+    selem = om.StructuringElement()
+    selem.set_selem(radius=1, connectivity='face', dim=3)
+    params = om.OriMapParameters(filename=filename,
+                              dimensions=(dimX+1, dimY+1, dimZ+1),
+                              spacing=(spacing, spacing, spacing),
+                              phases=list(phase_to_crys.keys()),
+                              phase_to_crys=phase_to_crys,
+                              selem=selem)
+
+    grid = om.OriMap(None, params)
 
     # coordinates of cell centers (starting at zero):
     tol = np.array(grid.spacing, dtype=DTYPEf).min()/100.
@@ -188,9 +197,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
 
     grid.cell_data['eul'] = q4np.q4_to_eul(grid.qarray)
 
-    filename = 'voro-{}-{}-{}.vtk'.format(dimX,dimY,dimZ)
-    grid.filename = filename
-    grid.save(filename)
+    grid.save(grid.params.filename)
     grid._save_phase_info()
 
     logging.info("#### Finished to build virtual microstructure. ####")
