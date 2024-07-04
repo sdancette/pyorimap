@@ -25,9 +25,13 @@ import virtual_micro as vmic
 from dataclasses import dataclass, field
 from typing import List, Tuple
 from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_structured
+from numba import njit, prange, int8, int32, float32
 
 #logging.basicConfig(filename='orimap.log', level=logging.INFO, format='%(asctime)s %(message)s')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+mempool = cp.get_default_memory_pool()
+pinned_mempool = cp.get_default_pinned_memory_pool()
 
 DTYPEf = np.float32
 DTYPEi = np.int32
@@ -110,6 +114,7 @@ class OriMapParameters:
     grain_size_bounds: List[int] = field(default_factory=lambda: [1, 2**31])
     grain_phase_bounds: List[int] = field(default_factory=lambda: [1, 255])
     dim3D: bool = True
+    compute_mode: str = 'numba_cpu'
     #grain_size_bounds: Tuple[int, int] = (1, 2**31)
     #grain_phase_bounds: Tuple[int, int] = (1, 255)
     #phases: np.ndarray[(int,), np.dtype[DTYPEi]] = field(default_factory=lambda: np.array([1]))
@@ -215,8 +220,8 @@ class OriMap(pv.ImageData):
                 logging.info("Simplifying structuring element for 2D.")
                 r = self.params.selem.radius; connec = self.params.selem.connectivity
                 self.params.selem.set_selem(r, connec, dim=2)
+        # force dtype of points to np.float32? : ImageData.points can't be set...
 
-    #def get_grains(self, thres=10., nmin=1, radius=1, connectivity='face', method='graph'):
     def get_grains(self):
         """
         Compute grains based on disorientation with cell neighbors.
@@ -292,17 +297,18 @@ class OriMap(pv.ImageData):
 
         Note: amounts to removing the last slice/row/col in (gridded) image data.
         """
+        points = self.points.astype(DTYPEf)
         if method == 1:
             tol = np.array(self.spacing, dtype=DTYPEf).min()/100.
-            self.whrC = (self.points[:,0] < self.bounds[1]-tol)*\
-                        (self.points[:,1] < self.bounds[3]-tol)*\
-                        (self.points[:,2] < self.bounds[5]-tol)
-            return self.points[self.whrC]
+            xmax = self.bounds[1]-tol; ymax = self.bounds[3]-tol; zmax = self.bounds[5]-tol
+            whrC =  (points[:,0] < xmax)*\
+                    (points[:,1] < ymax)*\
+                    (points[:,2] < zmax)
+            return points[whrC]
         else:
             # construct the point mask explicitely for faster access
             pass
 
-    #def _get_neighborhood(self, radius=1, connectivity='face'):
     def _get_neighborhood(self):
         """
         Get neighbors with given connectivity and corresponding disorientation.
@@ -318,6 +324,11 @@ class OriMap(pv.ImageData):
         self.deso = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEf) + 3000.
         self.neighbors = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEi)
 
+        if self.params.compute_mode == 'cupy':
+            self.deso_gpu = cp.asarray(self.deso)
+        else:
+            deso_gpu = None
+
         logging.info("Starting to compute neighbor disorientation.")
 
         # loop over the different types of neighbors defined by the structuring element:
@@ -325,7 +336,15 @@ class OriMap(pv.ImageData):
             logging.info("... ineb {}".format(ineb))
             self.neighbors[:,ineb] = self._get_neighbors_for_ineb(xyzC, dxyz, ineb)
 
-            self._get_disori_for_ineb(cellid, ineb, mode='numba_cpu')
+            self._get_disori_for_ineb(cellid, ineb, deso_gpu)
+
+        if self.params.compute_mode == 'cupy':
+            self.deso = cp.asnumpy(deso_gpu)
+
+            mempool.free_all_blocks()
+            pinned_mempool.free_all_blocks()
+            print('final, used:', mempool.used_bytes()/1024**2)
+            print('final, total:', mempool.total_bytes()/1024**2)
 
         logging.info("Finished to compute neighbor disorientation.")
 
@@ -337,10 +356,16 @@ class OriMap(pv.ImageData):
         dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
         z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
 
-        ii = self._xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
+        if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'cupy'):
+            dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
+            spacing = np.array(list(self.spacing), dtype=DTYPEf)
+            bounds = np.array(list(self.bounds), dtype=DTYPEf)
+            ii = xyz_to_index_numba(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode=1)
+        else:
+            ii = self._xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
         return ii
 
-    def _get_disori_for_ineb(self, icel, ineb, mode='numba_cpu'):
+    def _get_disori_for_ineb(self, icel, ineb, deso_gpu=None):
         """
         Compute the disorientation with the ineb_th family of neighbors.
         NB1: disorientation is initialized at +3000. for cell neighbors outside of the grid bounds.
@@ -358,6 +383,9 @@ class OriMap(pv.ImageData):
         except AttributeError:
             self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
 
+        if self.params.compute_mode == 'cupy':
+            qarr_gpu = cp.asarray(self.qarray)
+
         self.deso[:,ineb][whrNeb] = 2000.
         for phi in self.params.phase_to_crys.keys():
             # restrict neighborhood to existing neighbors AND identical phase on the 2 sides:
@@ -373,7 +401,30 @@ class OriMap(pv.ImageData):
                     self.params.phase_to_crys[phi].get_qsym()
                     qsym = self.params.phase_to_crys[phi].qsym
 
-                self.deso[:,ineb][whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+                if self.params.compute_mode == 'numba_cpu':
+                    self.deso[:,ineb][whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+                elif self.params.compute_mode == 'cupy':
+                    qa_gpu = qarr_gpu[icel[whr]]
+                    qb_gpu = qarr_gpu[neighb[whr]]
+                    qc_gpu = cp.zeros_like(qa_gpu)
+                    qsym_gpu = cp.asarray(qsym)
+                    a0_gpu = cp.zeros(len(qa_gpu), dtype=DTYPEf)
+                    a1_gpu = cp.zeros_like(a0_gpu)
+
+                    print('start, used:', mempool.used_bytes()/1024**2)
+                    print('start, total:', mempool.total_bytes()/1024**2)
+
+                    q4cp.q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1, revertqa=False)
+                    deso_gpu[:,ineb][whr] = a0_gpu
+
+                    qa_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
+                    qb_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
+                    qc_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
+                    a0_gpu = cp.array([0], dtype=DTYPEf)
+                    a1_gpu = cp.array([0], dtype=DTYPEf)
+
+                    print('end, used:', mempool.used_bytes()/1024**2)
+                    print('end, total:', mempool.total_bytes()/1024**2)
 
             elif phi == 0:
                 self.deso[:,ineb][whr] = -1.
@@ -388,7 +439,6 @@ class OriMap(pv.ImageData):
 
         logging.info("Finished to compute {} connected components.".format(ncomp))
 
-    #def _build_cell_graph(self, thres=10., symmetric=False):
     def _build_cell_graph(self, symmetric=False):
         """
         Build the graph of cell connections as a scipy.sparse csr_array.
@@ -406,7 +456,6 @@ class OriMap(pv.ImageData):
 
         logging.info("Finished to build cell graph.")
 
-    #def _filter_grains(self, nmin=1, nmax=2**31, phimin=1, phimax=2**8):
     def _filter_grains(self):
         """
         Relabel grains in a consecutive sequence after the exclusion of regions outside of ncell_range and phase_range.
@@ -652,4 +701,30 @@ def read_from_vtk(filename):
 
     return orimap
 
+@njit(int32[:](float32[:],float32[:],float32[:],int32[:],float32[:],float32[:],int8), fastmath=True, parallel=True)
+def xyz_to_index_numba(x, y, z, dimensions, spacing, bounds, mode=1):
+    """
+    Return the cell/point indices in the grid from (x,y,z) coordinates.
+    Numba version.
+    """
+    if mode == 1: # cell mode
+        nx, ny, nz = dimensions[0]-1, dimensions[1]-1, dimensions[2]-1
+    elif mode == 2: # point mode
+        nx, ny, nz = dimensions[0], dimensions[1], dimensions[2]
+    dx, dy, dz = spacing
+    ox, oy, oz = bounds[0], bounds[2], bounds[4]
+
+    nn = len(x)
+    ii = np.zeros(nn, dtype=np.int32)
+    for i in prange(nn):
+        a = np.round((x[i]-ox)/dx)
+        b = np.round((y[i]-oy)/dy)
+        c = np.round((z[i]-oz)/dz)
+        if (a >= 0) and (a < nx) and (b >= 0) and (b < ny) and (c >= 0) and (c < nz):
+            c = c*nx*ny
+            b = b*nx
+            ii[i] = np.int32(c + b + a)
+        else:
+            ii[i] = -1
+    return ii
 
