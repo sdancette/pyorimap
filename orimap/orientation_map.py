@@ -149,7 +149,7 @@ class Crystal:
                 self.sym = 'none'
         else:
             self.sym = 'none'
-            if not name == 'unindexed':
+            if not self.name == 'unindexed':
                 logging.warning("Unexpected crystal lattice")
 
     def get_qsym(self):
@@ -164,6 +164,8 @@ class Crystal:
             self.qsym = q4np.q4_sym_tetra()
         elif self.sym == 'ortho':
             self.qsym = q4np.q4_sym_ortho()
+        elif self.sym == 'none':
+            self.qsym = np.array([[1,0,0,0]], dtype=DTYPEf)
         else:
             logging.warning("No quaternion symmetry operator implemented for crystal {self.sym}.")
 
@@ -220,6 +222,7 @@ class OriMap(pv.ImageData):
                 logging.info("Simplifying structuring element for 2D.")
                 r = self.params.selem.radius; connec = self.params.selem.connectivity
                 self.params.selem.set_selem(r, connec, dim=2)
+
         # force dtype of points to np.float32? : ImageData.points can't be set...
 
     def get_grains(self):
@@ -312,7 +315,9 @@ class OriMap(pv.ImageData):
     def _get_neighborhood(self):
         """
         Get neighbors with given connectivity and corresponding disorientation.
-        """
+        NB1: disorientation is set to +362. for potential cell neighbors outside of the grid bounds.
+        NB2: disorientation is set to +361. for cell neighbors belonging to different phases.
+         """
         logging.info("Starting to retrieve neighbors with {} connectivity and radius {}.".format(self.params.selem.connectivity, self.params.selem.radius))
 
         # get the coordinates of the cells (dimensions - 1 wrt the points):
@@ -320,32 +325,18 @@ class OriMap(pv.ImageData):
         dx, dy, dz = self.spacing
         nn = self.n_cells
 
-        cellid = np.arange(nn).astype(DTYPEi)
-        self.deso = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEf) + 3000.
+        #cellid = np.arange(nn).astype(DTYPEi)
+        self.deso = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEf)
         self.neighbors = np.zeros((nn,self.params.selem.nneb), dtype=DTYPEi)
 
-        if self.params.compute_mode == 'cupy':
-            self.deso_gpu = cp.asarray(self.deso)
-        else:
-            deso_gpu = None
-
-        logging.info("Starting to compute neighbor disorientation.")
-
+        logging.info("Starting to retrieve neighbors.")
         # loop over the different types of neighbors defined by the structuring element:
         for ineb, dxyz in enumerate(self.params.selem.dxyz):
             logging.info("... ineb {}".format(ineb))
             self.neighbors[:,ineb] = self._get_neighbors_for_ineb(xyzC, dxyz, ineb)
 
-            self._get_disori_for_ineb(cellid, ineb, deso_gpu)
-
-        if self.params.compute_mode == 'cupy':
-            self.deso = cp.asnumpy(deso_gpu)
-
-            mempool.free_all_blocks()
-            pinned_mempool.free_all_blocks()
-            print('final, used:', mempool.used_bytes()/1024**2)
-            print('final, total:', mempool.total_bytes()/1024**2)
-
+        logging.info("Starting to compute neighbor disorientation.")
+        self._get_disori_by_phase()
         logging.info("Finished to compute neighbor disorientation.")
 
     def _get_neighbors_for_ineb(self, xyzC, dxyz, ineb):
@@ -365,19 +356,15 @@ class OriMap(pv.ImageData):
             ii = self._xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
         return ii
 
-    def _get_disori_for_ineb(self, icel, ineb, deso_gpu=None):
+    def _get_disori_by_phase(self):
         """
-        Compute the disorientation with the ineb_th family of neighbors.
-        NB1: disorientation is initialized at +3000. for cell neighbors outside of the grid bounds.
-        NB2: disorientation is initialized at +2000. for cell neighbors belonging to different phases.
-        NB3: disorientation is initialized at -1. for cell neighbors belonging to phase 0 (unindexed by default).
+        Compute the disorientation for all families of neighbors, one phase after the other.
+
+        NB1: disorientation is set to +362. for potential cell neighbors outside of the grid bounds.
+        NB2: disorientation is set to +361. for cell neighbors belonging to different phases.
         """
+        logging.info("... compute_mode for disorientation: {}".format(self.params.compute_mode))
         phase = self.cell_data['phase']
-
-        neighb = self.neighbors[:,ineb]
-        # restrict to existing neighbors, i.e. within the bounds of the grid:
-        whrNeb = (neighb >= 0)
-
         try:
             ncrys = len(self.qarray)
         except AttributeError:
@@ -386,48 +373,88 @@ class OriMap(pv.ImageData):
         if self.params.compute_mode == 'cupy':
             qarr_gpu = cp.asarray(self.qarray)
 
-        self.deso[:,ineb][whrNeb] = 2000.
-        for phi in self.params.phase_to_crys.keys():
-            # restrict neighborhood to existing neighbors AND identical phase on the 2 sides:
-            whr = whrNeb * (phase[icel] == phi) * (phase[icel] == phase[neighb])
+        # loop by phase ID for disorientation calculation:
+        thephases = sorted(list(self.params.phase_to_crys.keys()))
+        for phi in thephases:
+            whrPhi = (phase == phi)
+            neighb = self.neighbors[whrPhi]
+            qa = self.qarray[whrPhi]
 
-            if phi > 0:
-                qa = self.qarray[icel[whr]]
-                qb = self.qarray[neighb[whr]]
-                try:
-                    qsym = self.params.phase_to_crys[phi].qsym
-                except AttributeError:
-                    self.params.phase_to_crys[phi].infer_symmetry()
-                    self.params.phase_to_crys[phi].get_qsym()
-                    qsym = self.params.phase_to_crys[phi].qsym
+            if phi == 0: # unindexed
+                for ineb in range(self.params.selem.nneb):
+                    theNeb = neighb[:,ineb]
+                    whrNeb = (theNeb >= 0) # where False, the neighbor is out of the grid bounds
+                    phaseNeb = phase[theNeb]
+                    whrPhiNeb = (phaseNeb == phi) # where False, the neighbor belongs to another phase
+
+                    self.deso[whrPhi][:,ineb] = -1.
+                continue
+
+            try:
+                qsym = self.params.phase_to_crys[phi].qsym
+            except AttributeError:
+                self.params.phase_to_crys[phi].infer_symmetry()
+                self.params.phase_to_crys[phi].get_qsym()
+                qsym = self.params.phase_to_crys[phi].qsym
+
+            if self.params.compute_mode == 'cupy':
+                qsym_gpu = cp.asarray(qsym)
+                qa_gpu = qarr_gpu[whrPhi]
+                qc_gpu = cp.zeros_like(qa_gpu)
+                deso_gpu = cp.asarray(self.deso[whrPhi]) #+ 3000.
+                a1_gpu = cp.zeros_like(deso_gpu[:,0])
+                print('GPU mem, start, used:', mempool.used_bytes()/1024**2)
+                print('GPU mem, start, total:', mempool.total_bytes()/1024**2)
+            else:
+                deso = self.deso[whrPhi]
+
+            # loop by neighbor type:
+            for ineb in range(self.params.selem.nneb):
+                logging.info("... phase {}, ineb {}".format(phi, ineb))
+                theNeb = neighb[:,ineb]
 
                 if self.params.compute_mode == 'numba_cpu':
-                    self.deso[:,ineb][whr] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+                    qb = self.qarray[theNeb]
+                    deso[:,ineb] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
                 elif self.params.compute_mode == 'cupy':
-                    qa_gpu = qarr_gpu[icel[whr]]
-                    qb_gpu = qarr_gpu[neighb[whr]]
-                    qc_gpu = cp.zeros_like(qa_gpu)
-                    qsym_gpu = cp.asarray(qsym)
-                    a0_gpu = cp.zeros(len(qa_gpu), dtype=DTYPEf)
-                    a1_gpu = cp.zeros_like(a0_gpu)
+                    qb_gpu = qarr_gpu[theNeb]
+                    q4cp.q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu,
+                                         deso_gpu[:,ineb], a1_gpu, method=1, revertqa=True)
+                    print('GPU mem, middle, used:', mempool.used_bytes()/1024**2)
+                    print('GPU mem, middle, total:', mempool.total_bytes()/1024**2)
 
-                    print('start, used:', mempool.used_bytes()/1024**2)
-                    print('start, total:', mempool.total_bytes()/1024**2)
+                    qb_gpu = qb_gpu[0:1]*0. # free memory for next neighbor
 
-                    q4cp.q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1, revertqa=False)
-                    deso_gpu[:,ineb][whr] = a0_gpu
+            # transfer results and reset gpu_arrays before jumping to next phase if cupy:
+            if self.params.compute_mode == 'cupy':
+                self.deso[whrPhi] = cp.asnumpy(deso_gpu)
 
-                    qa_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
-                    qb_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
-                    qc_gpu = cp.array([[1,0,0,0]], dtype=DTYPEf)
-                    a0_gpu = cp.array([0], dtype=DTYPEf)
-                    a1_gpu = cp.array([0], dtype=DTYPEf)
+                # free memory for next phase:
+                qsym_gpu = qsym_gpu[0:1]*0.
+                qa_gpu =   qa_gpu[0:1]*0.
+                qc_gpu =   qc_gpu[0:1]*0.
+                deso_gpu = deso_gpu[0:1]*0.
+                a1_gpu = a1_gpu[0:1]
+            else:
+                self.deso[whrPhi] = deso
 
-                    print('end, used:', mempool.used_bytes()/1024**2)
-                    print('end, total:', mempool.total_bytes()/1024**2)
+        # final pass on the neighbors to "erase" unproper neighbor disorientations:
+        logging.info("... updating unproper neighbor disorientations...")
+        for ineb in range(self.params.selem.nneb):
+            theNeb = self.neighbors[:,ineb]
+            whrNeb = (theNeb >= 0)
+            phiNeb = phase[theNeb]
+            whrPhi = (phase == phiNeb)
+            self.deso[:,ineb][~whrPhi] = 361.
+            self.deso[:,ineb][~whrNeb] = 362.
+            logging.info("... ineb {}".format(ineb))
 
-            elif phi == 0:
-                self.deso[:,ineb][whr] = -1.
+        if self.params.compute_mode == 'cupy':
+            qarr_gpu = qarr_gpu[0:1]*0.
+            mempool.free_all_blocks()
+            pinned_mempool.free_all_blocks()
+            print('GPU mem, final, used:', mempool.used_bytes()/1024**2)
+            print('GPU mem, final, total:', mempool.total_bytes()/1024**2)
 
     def _get_connected_components(self):
         """
@@ -717,7 +744,7 @@ def xyz_to_index_numba(x, y, z, dimensions, spacing, bounds, mode=1):
     nn = len(x)
     ii = np.zeros(nn, dtype=np.int32)
     for i in prange(nn):
-        a = np.round((x[i]-ox)/dx)
+        a = np.round((x[i]-ox)/dx);
         b = np.round((y[i]-oy)/dy)
         c = np.round((z[i]-oz)/dz)
         if (a >= 0) and (a < nx) and (b >= 0) and (b < ny) and (c >= 0) and (c < nz):
