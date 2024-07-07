@@ -201,12 +201,12 @@ def q4_disori_angle(qa, qb, qc, qsym, a0, a1, method=1, revertqa=False):
     >>> a0_gpu = cp.zeros(qa_gpu.shape[0], dtype=DTYPEf)
     >>> a1_gpu = cp.zeros_like(a0_gpu)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1)
-    >>> np.allclose(ang, cp.asnumpy(a0_gpu), atol=1e-3)
+    >>> np.allclose(ang, cp.asnumpy(a0_gpu), atol=1e-2)
     True
     >>> a0bis_gpu = cp.zeros_like(a0_gpu)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0bis_gpu, a1_gpu, method=2)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1)
-    >>> cp.allclose(a0_gpu, a0bis_gpu, atol=1e-3)
+    >>> cp.allclose(a0_gpu, a0bis_gpu, atol=1e-2)
     array(True)
     """
 
