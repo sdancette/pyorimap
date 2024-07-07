@@ -837,9 +837,10 @@ def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
     """
     ang  = np.zeros(len(qa), dtype=dtype)
     if method == 1:
-        # disorientation expressed in the frame of crystal a:
+        # disorientation qc between qa and qb expressed in the frame of crystal a:
         qc = q4_mult(q4_inv(qa), qb)
         for q in qsym:
+            # cosine of the half angle between qc and the ith symmetry operator in qsym:
             ang1 = q4_cosang2(qc, q)
             ang = np.maximum(ang, ang1)
     else:
