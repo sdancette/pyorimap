@@ -18,7 +18,7 @@ The module contains the following Kernels and functions:
 import logging
 import numpy as np
 import cupy as cp
-import quaternions_np as q4np
+from pyorimap.quaternions import quaternions_np as q4np
 
 DTYPEf = cp.float32
 DTYPEi = cp.int32

@@ -31,7 +31,7 @@ import numpy as np
 import quaternion as quat
 
 from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_structured
-from pom_data import mtex_data as mtex
+from pyorimap.pom_data import mtex_data as mtex
 
 DTYPEf = np.float32
 DTYPEi = np.int32

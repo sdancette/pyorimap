@@ -16,7 +16,7 @@ This module contains the following functions:
 import logging
 import numpy as np
 import cupy as cp
-import quaternions_np as q4np
+from pyorimap.quaternions import quaternions_np as q4np
 
 from numba import cuda, int32, float32
 

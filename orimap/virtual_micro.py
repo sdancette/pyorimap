@@ -15,8 +15,8 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial import KDTree
 
-import quaternions_np as q4np
-import orientation_map as om
+from pyorimap.quaternions import quaternions_np as q4np
+from pyorimap.orimap import orientation_map as om
 
 DTYPEf = np.float32
 DTYPEi = np.int32

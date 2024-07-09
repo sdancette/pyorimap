@@ -16,13 +16,13 @@ import logging
 import numpy as np
 import cupy as cp
 import pandas as pd
-import quaternion as quat
+#import quaternion as quat
 import matplotlib.pyplot as plt
 
-import quaternions_np as q4np
-import quaternions_cp as q4cp
-import quaternions_numba_cpu as q4nCPU
-import quaternions_numba_gpu as q4nGPU
+from pyorimap.quaternions import quaternions_np as q4np
+from pyorimap.quaternions import quaternions_cp as q4cp
+from pyorimap.quaternions import quaternions_numba_cpu as q4nCPU
+from pyorimap.quaternions import quaternions_numba_gpu as q4nGPU
 
 from cupyx.profiler import benchmark
 from cpuinfo import get_cpu_info

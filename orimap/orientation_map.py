@@ -17,10 +17,11 @@ import pyvista as pv
 import skimage as sk
 from scipy import sparse
 
-import quaternions_np as q4np
-import quaternions_cp as q4cp
-import quaternions_numba_cpu as q4nc
-import virtual_micro as vmic
+from pyorimap.quaternions import quaternions_np as q4np
+from pyorimap.quaternions import quaternions_cp as q4cp
+from pyorimap.quaternions import quaternions_numba_cpu as q4nCPU
+from pyorimap.quaternions import quaternions_numba_gpu as q4nGPU
+from pyorimap.orimap import virtual_micro as vmic
 
 from dataclasses import dataclass, field
 from typing import List, Tuple
@@ -415,7 +416,7 @@ class OriMap(pv.ImageData):
 
                 if self.params.compute_mode == 'numba_cpu':
                     qb = self.qarray[theNeb]
-                    deso[:,ineb] = q4nc.q4_disori_angle(qa, qb, qsym, method=1)
+                    deso[:,ineb] = q4nCPU.q4_disori_angle(qa, qb, qsym, method=1)
                 elif self.params.compute_mode == 'cupy':
                     qb_gpu = qarr_gpu[theNeb]
                     q4cp.q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu,
