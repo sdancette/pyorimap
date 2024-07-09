@@ -24,21 +24,21 @@ DTYPEf = np.float32
 DTYPEi = np.int32
 _EPS = 1e-9
 
-@cuda.jit((float32[:], float32[:], float32[:]), device=True)
+@cuda.jit((float32[:], float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_mult(qa, qb, qc):
     qc[0] = qa[0]*qb[0] - qa[1]*qb[1] - qa[2]*qb[2] - qa[3]*qb[3]
     qc[1] = qa[0]*qb[1] + qa[1]*qb[0] + qa[2]*qb[3] - qa[3]*qb[2]
     qc[2] = qa[0]*qb[2] - qa[1]*qb[3] + qa[2]*qb[0] + qa[3]*qb[1]
     qc[3] = qa[0]*qb[3] + qa[1]*qb[2] - qa[2]*qb[1] + qa[3]*qb[0]
 
-@cuda.jit((float32[:], float32[:]), device=True)
+@cuda.jit((float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_inv(qa, qb):
     qb[0] =  qa[0]
     qb[1] = -qa[1]
     qb[2] = -qa[2]
     qb[3] = -qa[3]
 
-@cuda.jit(float32(float32[:], float32[:]), device=True)
+@cuda.jit(float32(float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_cosang2(qa, qb):
     return( min(abs(qa[0]*qb[0] + qa[1]*qb[1] + qa[2]*qb[2] + qa[3]*qb[3]), 1.) )
 
@@ -54,7 +54,7 @@ def _kernel_q4_inv(qa, qb):
     if i < qa.shape[0]:
         _device_q4_inv(qa[i,:], qb[i,:])
 
-@cuda.jit((float32[:,:], float32[:,:], float32[:,:], float32[:]))
+@cuda.jit((float32[:,:], float32[:,:], float32[:,:], float32[:]), fastmath=True)
 def _kernel_q4_disori_angle(qa, qb, qsym, ang):
     i = cuda.grid(1)
     if i < qa.shape[0]:
