@@ -1,0 +1,12 @@
+cupy-cuda12x
+h5py
+matplotlib
+numba
+numpy
+numpy-quaternion
+openpyxl
+pandas
+pyvista
+py-cpuinfo
+scikit-image
+scipy

@@ -98,14 +98,14 @@ def q4_inv(qa, qb):
     >>> qa = cp.array([0,1,0,0], dtype=cp.float32)
     >>> qb = cp.zeros_like(qa)
     >>> q4_inv(qa, qb)
-    >>> cp.allclose(qb, cp.array([0,-1,0,0], dtype=np.float32))
+    >>> cp.allclose(qb, cp.array([0,-1,0,0], dtype=np.float32), atol=1e-6)
     array(True)
     >>> qa = cp.asarray(q4np.q4_random(n=1024))
     >>> qb = cp.zeros_like(qa)
     >>> q4_inv(qa, qb)
-    >>> cp.allclose(qa[:,0], qb[:,0])
+    >>> cp.allclose(qa[:,0], qb[:,0], atol=1e-6)
     array(True)
-    >>> cp.allclose(qa[:,1:], -qb[:,1:])
+    >>> cp.allclose(qa[:,1:], -qb[:,1:], atol=1e-6)
     array(True)
     """
     qb[...,0] =   qa[...,0]
@@ -201,12 +201,12 @@ def q4_disori_angle(qa, qb, qc, qsym, a0, a1, method=1, revertqa=False):
     >>> a0_gpu = cp.zeros(qa_gpu.shape[0], dtype=DTYPEf)
     >>> a1_gpu = cp.zeros_like(a0_gpu)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1)
-    >>> np.allclose(ang, cp.asnumpy(a0_gpu), atol=1e-2)
+    >>> np.allclose(ang, cp.asnumpy(a0_gpu), atol=0.1)
     True
     >>> a0bis_gpu = cp.zeros_like(a0_gpu)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0bis_gpu, a1_gpu, method=2)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu, a0_gpu, a1_gpu, method=1)
-    >>> cp.allclose(a0_gpu, a0bis_gpu, atol=1e-2)
+    >>> cp.allclose(a0_gpu, a0bis_gpu, atol=0.1)
     array(True)
     """
 

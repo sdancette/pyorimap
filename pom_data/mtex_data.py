@@ -15,13 +15,13 @@ def load_mtex_qsym(sym='cubic', dtype=np.float32):
     (Intended use for doctest.)
     """
     if sym == 'cubic':
-        data = pkgutil.get_data('pom_data', 'qsym_cubic_mtex.txt')
+        data = pkgutil.get_data('pyorimap.pom_data', 'qsym_cubic_mtex.txt')
     elif sym == 'hex':
-        data = pkgutil.get_data('pom_data', 'qsym_hex_mtex.txt')
+        data = pkgutil.get_data('pyorimap.pom_data', 'qsym_hex_mtex.txt')
     elif sym == 'tetra':
-        data = pkgutil.get_data('pom_data', 'qsym_tetra_mtex.txt')
+        data = pkgutil.get_data('pyorimap.pom_data', 'qsym_tetra_mtex.txt')
     elif sym == 'ortho':
-        data = pkgutil.get_data('pom_data', 'qsym_ortho_mtex.txt')
+        data = pkgutil.get_data('pyorimap.pom_data', 'qsym_ortho_mtex.txt')
     data = StringIO(data.decode('utf-8'))
     qsym = np.loadtxt(data, delimiter=',', dtype=dtype)
 

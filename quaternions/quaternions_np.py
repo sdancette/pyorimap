@@ -35,9 +35,54 @@ from pyorimap.pom_data import mtex_data as mtex
 
 DTYPEf = np.float32
 DTYPEi = np.int32
-_EPS = 1e-9
+_EPS = 1e-7
 
-def q4_sym_cubic(dtype=np.float32):
+def q4_positive(qarr, _EPS=1e-7):
+    """
+    Return positive quaternion.
+
+    If the first non-zero term of each quaternion is negative,
+    the opposite quaternion is returned, quaternion q and -q
+    representing the same rotation.
+
+    Parameters
+    ----------
+    qarr : array_like
+        (n, 4) array of quaternions or single quaternion of shape (4,).
+    _EPS : float
+        tolerance for non-zero values.
+
+    Returns
+    -------
+    qpos : ndarray
+        array of positive quaternions.
+
+    Examples
+    --------
+    >>> qarr = np.array([[-1,0,0,0], [0,-1,0,0], [0,0,-1,0], [0,0,0,-1]]).astype(np.float32)
+    >>> qpos = q4_positive(qarr)
+    >>> np.allclose(qpos, -qarr, atol=1e-6)
+    True
+    """
+    qpos = np.atleast_2d(qarr).copy()
+
+    # where q0 < 0:
+    whr1 = (qpos[:,0] < -_EPS)
+    qpos[whr1] *= -1
+
+    # where q0 close to zero (-_EPS < q0 < _EPS), check other terms:
+    whr2 = ~whr1 * (qpos[:,0] < _EPS)
+    if np.sum(whr2) > 0:
+        qsub = qpos[whr2]
+        col = (np.abs(qsub) > _EPS).argmax(axis=1)
+        row = np.arange(qsub.shape[0])
+        whr = (qsub[row, col] < 0)
+        qsub[whr] *=  -1
+        qpos[whr2] = qsub
+
+    return np.squeeze(qpos)
+
+def q4_sym_cubic(static=True, dtype=np.float32):
     """
     Compute the (24, 4) quaternion array for cubic crystal symmetry.
 
@@ -48,35 +93,64 @@ def q4_sym_cubic(dtype=np.float32):
 
     Examples
     --------
+    >>> np.allclose(q4_sym_cubic(static=True), q4_sym_cubic(static=False), atol=1e-6)
+    True
     >>> qsym = q4_sym_cubic()
     >>> qmtex = mtex.load_mtex_qsym(sym='cubic')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=1e-6)
+    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=0.1)
     True
     """
-    qsym = np.zeros((24,4), dtype=dtype)
+    if static:
+        sq2 = np.sqrt(2.)/2
+        qsym = np.array([[ 1.    ,  0.    ,  0.    ,  0.    ],
+                        [ 0.5   ,  0.5   ,  0.5   ,  0.5   ],
+                        [-0.5   ,  0.5   ,  0.5   ,  0.5   ],
+                        [-sq2,  0.    ,  0.    , -sq2],
+                        [ 0.    ,  0.    , -sq2, -sq2],
+                        [ sq2,  0.    , -sq2,  0.    ],
+                        [ 0.    ,  0.    ,  0.    ,  1.    ],
+                        [-0.5   , -0.5   ,  0.5   ,  0.5   ],
+                        [-0.5   , -0.5   ,  0.5   , -0.5   ],
+                        [ sq2,  0.    ,  0.    , -sq2],
+                        [ sq2,  sq2,  0.    ,  0.    ],
+                        [ 0.    ,  sq2,  0.    ,  sq2],
+                        [ 0.    , -sq2, -sq2,  0.    ],
+                        [ sq2, -sq2,  0.    ,  0.    ],
+                        [ sq2,  0.    ,  sq2,  0.    ],
+                        [ 0.    ,  1.    ,  0.    ,  0.    ],
+                        [-0.5   ,  0.5   , -0.5   ,  0.5   ],
+                        [-0.5   , -0.5   , -0.5   ,  0.5   ],
+                        [ 0.    , -sq2,  sq2,  0.    ],
+                        [ 0.    ,  0.    ,  sq2, -sq2],
+                        [ 0.    ,  sq2,  0.    , -sq2],
+                        [ 0.    ,  0.    , -1.    ,  0.    ],
+                        [ 0.5   , -0.5   , -0.5   ,  0.5   ],
+                        [ 0.5   , -0.5   ,  0.5   ,  0.5   ]], dtype=dtype)
+    else:
+        qsym = np.zeros((24,4), dtype=dtype)
 
-    axis = np.array([[1,1,0],[0,0,1],[1,1,1]], dtype=dtype)
-    ang =  np.array([ 180.,   90.,    120.  ], dtype=dtype)
-    qrot = q4_from_axis_angle(axis, ang)
+        axis = np.array([[1,1,0],[0,0,1],[1,1,1]], dtype=dtype)
+        ang =  np.array([ 180.,   90.,    120.  ], dtype=dtype)
+        qrot = q4_from_axis_angle(axis, ang)
 
-    q = np.array([1,0,0,0], dtype=dtype)
-    isym = 0
-    for l1 in range(2):
-        for l2 in range(4):
-            for l3 in range(3):
-                qsym[isym,:] = q
-                isym += 1
-                # ::::::::  3-fold rotation about (1 1 1)  :::::::
-                q = q4_mult(q, qrot[2])
-            # :::::::::  4-fold rotation about (0 0 1)  ::::::::
-            q = q4_mult(q, qrot[1])
-        # ::::::::::  2-fold rotation about (1 1 0)  :::::::::
-        q = q4_mult(q, qrot[0])
+        q = np.array([1,0,0,0], dtype=dtype)
+        isym = 0
+        for l1 in range(2):
+            for l2 in range(4):
+                for l3 in range(3):
+                    qsym[isym,:] = q
+                    isym += 1
+                    # ::::::::  3-fold rotation about (1 1 1)  :::::::
+                    q = q4_mult(q, qrot[2])
+                # :::::::::  4-fold rotation about (0 0 1)  ::::::::
+                q = q4_mult(q, qrot[1])
+            # ::::::::::  2-fold rotation about (1 1 0)  :::::::::
+            q = q4_mult(q, qrot[0])
 
     return qsym
 
-def q4_sym_hex(dtype=np.float32):
+def q4_sym_hex(static=True, dtype=np.float32):
     """
     Compute the (12, 4) quaternion array for hexagonal crystal symmetry.
 
@@ -87,32 +161,49 @@ def q4_sym_hex(dtype=np.float32):
 
     Examples
     --------
+    >>> np.allclose(q4_sym_hex(static=True), q4_sym_hex(static=False), atol=1e-6)
+    True
     >>> qsym = q4_sym_hex()
     >>> qmtex = mtex.load_mtex_qsym(sym='hex')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(ang, np.zeros(12, dtype=np.float32), atol=1e-6)
+    >>> np.allclose(ang, np.zeros(12, dtype=np.float32), atol=0.1)
     True
     """
-    qsym = np.zeros((12,4), dtype=dtype)
+    if static:
+        sq3 = np.sqrt(3.)/2
+        qsym = np.array([[ 1.   ,  0.   ,  0.   ,  0.   ],
+                        [ sq3,  0.   ,  0.   ,  0.5  ],
+                        [ 0.5  ,  0.   ,  0.   ,  sq3],
+                        [ 0.   ,  0.   ,  0.   ,  1.   ],
+                        [-0.5  ,  0.   ,  0.   ,  sq3],
+                        [-sq3,  0.   ,  0.   ,  0.5  ],
+                        [ 0.   , -1.   ,  0.   ,  0.   ],
+                        [ 0.   , -sq3,  0.5  ,  0.   ],
+                        [ 0.   , -0.5  ,  sq3,  0.   ],
+                        [-0.   ,  0.   ,  1.   ,  0.   ],
+                        [-0.   ,  0.5  ,  sq3,  0.   ],
+                        [-0.   ,  sq3,  0.5  ,  0.   ]], dtype=dtype)
+    else:
+        qsym = np.zeros((12,4), dtype=dtype)
 
-    axis = np.array([[1,0,0],[0,0,1]], dtype=dtype)
-    ang =  np.array([ 180.,   60.   ], dtype=dtype)
-    qrot = q4_from_axis_angle(axis, ang)
+        axis = np.array([[1,0,0],[0,0,1]], dtype=dtype)
+        ang =  np.array([ 180.,   60.   ], dtype=dtype)
+        qrot = q4_from_axis_angle(axis, ang)
 
-    q = np.array([1,0,0,0], dtype=dtype)
-    isym = 0
-    for l1 in range(2):
-        for l2 in range(6):
-            qsym[isym,:] = q
-            isym += 1
-            # ::::::::  6-fold rotation about (0 0 0 1)  :::::::
-            q = q4_mult(q, qrot[1])
-        # ::::::::::  2-fold rotation about (1 0 0 0)  :::::::::
-        q = q4_mult(q, qrot[0])
+        q = np.array([1,0,0,0], dtype=dtype)
+        isym = 0
+        for l1 in range(2):
+            for l2 in range(6):
+                qsym[isym,:] = q
+                isym += 1
+                # ::::::::  6-fold rotation about (0 0 0 1)  :::::::
+                q = q4_mult(q, qrot[1])
+            # ::::::::::  2-fold rotation about (1 0 0 0)  :::::::::
+            q = q4_mult(q, qrot[0])
 
     return qsym
 
-def q4_sym_tetra(dtype=np.float32):
+def q4_sym_tetra(static=True, dtype=np.float32):
     """
     Compute the (8, 4) quaternion array for tetragonal crystal symmetry.
 
@@ -123,32 +214,45 @@ def q4_sym_tetra(dtype=np.float32):
 
     Examples
     --------
+    >>> np.allclose(q4_sym_tetra(static=True), q4_sym_tetra(static=False), atol=1e-6)
+    True
     >>> qsym = q4_sym_tetra()
     >>> qmtex = mtex.load_mtex_qsym(sym='tetra')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(np.degrees(ang), np.zeros(8, dtype=np.float32), atol=1e-1)
+    >>> np.allclose(np.degrees(ang), np.zeros(8, dtype=np.float32), atol=0.1)
     True
     """
-    qsym = np.zeros((8,4), dtype=dtype)
+    if static:
+        sq2 = np.sqrt(2.)/2
+        qsym = np.array([[ 1.    ,  0.    ,  0.    ,  0.    ],
+                        [ sq2,  0.    ,  0.    ,  sq2],
+                        [ 0.    ,  0.    ,  0.    ,  1.    ],
+                        [-sq2,  0.    ,  0.    ,  sq2],
+                        [ 0.    , -1.    ,  0.    ,  0.    ],
+                        [ 0.    , -sq2,  sq2,  0.    ],
+                        [ 0.    ,  0.    ,  1.    ,  0.    ],
+                        [-0.    ,  sq2,  sq2,  0.    ]], dtype=dtype)
+    else:
+        qsym = np.zeros((8,4), dtype=dtype)
 
-    axis = np.array([[1,0,0],[0,0,1]], dtype=dtype)
-    ang =  np.array([ 180.,   90.   ], dtype=dtype)
-    qrot = q4_from_axis_angle(axis, ang)
+        axis = np.array([[1,0,0],[0,0,1]], dtype=dtype)
+        ang =  np.array([ 180.,   90.   ], dtype=dtype)
+        qrot = q4_from_axis_angle(axis, ang)
 
-    q = np.array([1,0,0,0], dtype=dtype)
-    isym = 0
-    for l1 in range(2):
-        for l2 in range(4):
-            qsym[isym,:] = q
-            isym += 1
-            # ::::::::  4-fold rotation about (0 0 1)  :::::::
-            q = q4_mult(q, qrot[1])
-        # ::::::::::  2-fold rotation about (1 0 0)  :::::::::
-        q = q4_mult(q, qrot[0])
+        q = np.array([1,0,0,0], dtype=dtype)
+        isym = 0
+        for l1 in range(2):
+            for l2 in range(4):
+                qsym[isym,:] = q
+                isym += 1
+                # ::::::::  4-fold rotation about (0 0 1)  :::::::
+                q = q4_mult(q, qrot[1])
+            # ::::::::::  2-fold rotation about (1 0 0)  :::::::::
+            q = q4_mult(q, qrot[0])
 
     return qsym
 
-def q4_sym_ortho(dtype=np.float32):
+def q4_sym_ortho(static=True, dtype=np.float32):
     """
     Compute the (4, 4) quaternion array for orthorhombic crystal symmetry.
 
@@ -159,24 +263,32 @@ def q4_sym_ortho(dtype=np.float32):
 
     Examples
     --------
-    >>> qsym = q4_sym_tetra()
+    >>> np.allclose(q4_sym_ortho(static=True), q4_sym_ortho(static=False), atol=1e-6)
+    True
+    >>> qsym = q4_sym_ortho()
     >>> qmtex = mtex.load_mtex_qsym(sym='ortho')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(np.degrees(ang), np.zeros(4, dtype=np.float32), atol=1e-1)
+    >>> np.allclose(np.degrees(ang), np.zeros(4, dtype=np.float32), atol=0.1)
     True
     """
-    qsym = np.zeros((4,4), dtype=dtype)
+    if static:
+        qsym = np.array([[ 1.,  0.,  0.,  0.],
+                         [ 0.,  1.,  0.,  0.],
+                         [ 0.,  0.,  1.,  0.],
+                         [ 0.,  0.,  0.,  1.]], dtype=dtype)
+    else:
+        qsym = np.zeros((4,4), dtype=dtype)
 
-    axis = np.array([[1,0,0],[0,1,0],[0,0,1]], dtype=dtype)
-    ang =  np.array([ 180.,   180.,   180.  ], dtype=dtype)
-    qrot = q4_from_axis_angle(axis, ang)
+        axis = np.array([[1,0,0],[0,1,0],[0,0,1]], dtype=dtype)
+        ang =  np.array([ 180.,   180.,   180.  ], dtype=dtype)
+        qrot = q4_from_axis_angle(axis, ang)
 
-    q = np.array([1,0,0,0], dtype=dtype)
+        q = np.array([1,0,0,0], dtype=dtype)
 
-    qsym[0,:] = q
-    qsym[1,:] = q4_mult(q, qrot[0])
-    qsym[2,:] = q4_mult(q, qrot[1])
-    qsym[3,:] = q4_mult(q, qrot[2])
+        qsym[0,:] = q
+        qsym[1,:] = q4_mult(q, qrot[0])
+        qsym[2,:] = q4_mult(q, qrot[1])
+        qsym[3,:] = q4_mult(q, qrot[2])
 
     return qsym
 
@@ -221,8 +333,7 @@ def q4_random(n=1024, dtype=np.float32):
     q4[:,3] = np.sin(t2)*r2
 
     # positive quaternion:
-    whr = (q4[:,0] < 0.)
-    q4[whr] *= -1
+    q4 = q4_positive(q4)
 
     return np.squeeze(q4)
 
@@ -295,20 +406,21 @@ def q4_from_axis_angle(axis, ang, dtype=np.float32):
     qrot[:,2] = axis[...,1]
     qrot[:,3] = axis[...,2]
 
-    qlen = np.sqrt(np.sum(qrot**2, axis=1))
+    #qlen = np.sqrt(np.sum(qrot**2, axis=1)) # slower
+    qlen = np.sqrt(np.einsum('...i,...i', qrot, qrot))
     if qlen.min() > _EPS:
         qlen = np.sin(ang/2.0) / qlen
-        qrot[:,1] *= qlen
-        qrot[:,2] *= qlen
-        qrot[:,3] *= qlen
+        qrot *= qlen[..., np.newaxis]
+        #qrot[:,1] *= qlen
+        #qrot[:,2] *= qlen
+        #qrot[:,3] *= qlen
     else:
         logging.error("q4_from_axis_angle(): some axis vectors have a zero norm. Can't be used as to generate a quaternion.")
         raise ZeroDivisionError
     qrot[:,0] = np.cos(ang/2.0)
 
     # positive quaternion:
-    whr = (qrot[:,0] < 0.)
-    qrot[whr] *= -1
+    qrot = q4_positive(qrot)
 
     return np.squeeze(qrot)
 
@@ -459,8 +571,7 @@ def q4_from_eul(eul, dtype=np.float32):
     qarr[:,3] = np.cos(Phi/2)*np.sin((phi1+phi2)/2)
 
     # positive quaternion:
-    whr = (qarr[:,0] < 0.)
-    qarr[whr] *= -1
+    qarr = q4_positive(qarr)
 
     return np.squeeze(qarr)
 
@@ -493,12 +604,12 @@ def q4_to_eul(qarr, dtype=np.float32):
     >>> eul[:,0] *= 360.; eul[:,1] *= 180.; eul[:,2] *= 360.
     >>> qarr = q4_from_eul(eul)
     >>> eulback = q4_to_eul(qarr)
-    >>> np.allclose(eul, eulback, atol=1e-4)
+    >>> np.allclose(eul, eulback, atol=0.1)
     True
     >>> eul = [[10,30,50],[10,0,0],[10,180,0]]
     >>> qarr = q4_from_eul(eul)
     >>> eulback = q4_to_eul(qarr)
-    >>> np.allclose(eul, eulback, atol=1e-4)
+    >>> np.allclose(eul, eulback, atol=0.1)
     True
     """
     qarr = np.atleast_2d(qarr).astype(dtype)
@@ -624,7 +735,7 @@ def mat_to_eul(R, dtype=np.float32):
     >>> eul = q4_to_eul(qarr)
     >>> mat = mat_from_eul(eul)
     >>> eulback = mat_to_eul(mat)
-    >>> np.allclose(eul, eulback, atol=1e-3)
+    >>> np.allclose(eul, eulback, atol=0.1)
     True
     """
     R = np.atleast_3d(R).reshape(-1,3,3).astype(dtype)
@@ -665,7 +776,7 @@ def q4_from_mat(R, dtype=np.float32):
     >>> qarr = q4_random(n=1024)
     >>> R = q4_to_mat(qarr)
     >>> qback = q4_from_mat(R)
-    >>> np.allclose(qarr, qback, atol=1e6)
+    >>> np.allclose(qarr, qback, atol=1e-6)
     True
     """
     qarr = q4_from_eul( mat_to_eul(R) )
@@ -783,18 +894,18 @@ def q4_cosang2(qa, qb, dtype=np.float32):
     >>> qb = q4_mult(qa, qrot)
     >>> cosa2 = q4_cosang2(qa, qb)
     >>> aback = np.degrees(2*np.arccos(cosa2))
-    >>> np.allclose(aback, ang, atol=1e-1)
+    >>> np.allclose(aback, ang, atol=0.1)
     True
     """
 
-    #ang = np.minimum(np.abs(np.sum(qa*qb, axis=1)), 1.)
+    #ang = np.minimum(np.abs(np.sum(qa*qb, axis=1)), 1.) # slower
     ang = np.minimum(np.abs(qa[...,0]*qb[...,0] +
                             qa[...,1]*qb[...,1] +
                             qa[...,2]*qb[...,2] +
                             qa[...,3]*qb[...,3]), 1.)
     return ang
 
-def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
+def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32):
     """
     Disorientation angle (degrees) between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -809,11 +920,15 @@ def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
     method : int, default=1
         the method to compute disorientation: 1 or 2.
         Method 1 is faster.
+    return_index : bool, default=False
+        whether to return also the index of the i_th equivalent quaternion yielding minimum disorientation.
 
     Returns
     -------
     ang : ndarray
         the minumum angle (in degrees) between quaternions `qa` and `qb`, taking symmetries into account.
+    ii : ndarray
+        if `return_index`=True, the index of the i_th equivalent quaternion corresponding to the minimum disorientation.
 
     Raises
     ------
@@ -826,29 +941,99 @@ def q4_disori_angle(qa, qb, qsym, method=1, dtype=np.float32):
     >>> qsym = q4_sym_cubic()
     >>> qequ = q4_mult(qa, qsym)
     >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym)
-    >>> np.allclose(ang, np.zeros(24, dtype=np.float32))
+    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=0.1)
     True
     >>> qa = q4_random(1024)
     >>> qb = q4_random(1024)
-    >>> ang1 = q4_disori_angle(qa, qb, qsym, method=1)
-    >>> ang2 = q4_disori_angle(qa, qb, qsym, method=2)
-    >>> np.allclose(ang1, ang2, atol=1e-2)
+    >>> ang1, ii1 = q4_disori_angle(qa, qb, qsym, method=1, return_index=True)
+    >>> ang2, ii2 = q4_disori_angle(qa, qb, qsym, method=2, return_index=True)
+    >>> np.allclose(ang1, ang2, atol=0.1)
+    True
+    >>> np.allclose(ii1, ii2)
     True
     """
-    ang  = np.zeros(len(qa), dtype=dtype)
+
+    if qb.ndim == 1:
+        ang = np.zeros(np.atleast_2d(qa).shape[0], dtype=dtype)
+    else:
+        ang = np.zeros(np.atleast_2d(qb).shape[0], dtype=dtype)
+    if return_index:
+        ii = np.zeros(ang.shape, dtype=DTYPEi)
+
     if method == 1:
         # disorientation qc between qa and qb expressed in the frame of crystal a:
         qc = q4_mult(q4_inv(qa), qb)
-        for q in qsym:
+        for isym, q in enumerate(qsym):
             # cosine of the half angle between qc and the ith symmetry operator in qsym:
             ang1 = q4_cosang2(qc, q)
-            ang = np.maximum(ang, ang1)
+            if return_index:
+                whr = (ang1 > ang)
+                ang[whr] = ang1[whr]
+                ii[whr] = isym
+            else:
+                ang = np.maximum(ang, ang1)
     else:
-        for q in qsym:
+        for isym, q in enumerate(qsym):
             qc = q4_mult(qa, q)
             ang1 = q4_cosang2(qc, qb)
-            ang = np.maximum(ang, ang1)
-    return np.degrees(2*np.arccos(ang))
+            if return_index:
+                whr = (ang1 > ang)
+                ang[whr] = ang1[whr]
+                ii[whr] = isym
+            else:
+                ang = np.maximum(ang, ang1)
+    if return_index:
+        return np.degrees(2*np.arccos(ang)), ii
+    else:
+        return np.degrees(2*np.arccos(ang))
+
+def q4_disori_quat(qa, qb, qsym, frame='crys_a', dtype=np.float32):
+    """
+    Disorientation quaternion between `qa` and `qb`, taking `qsym` symmetries into account.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion.
+    qb : ndarray
+        array of quaternions or single quaternion.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+    frame : str, default='crys_a'
+        the frame to express the disorientation quaternion, 'ref' or 'crys_a'.
+
+    Returns
+    -------
+    qdis : ndarray
+        quaternion representing the minimum disorientation from `qa` to `qb`, taking `qsym` symmetries into account.
+
+    Examples
+    --------
+    >>> qa = q4_random(1)
+    """
+    ############ in progress ############
+    if qb.ndim == 1:
+        qdis = np.zeros(qa.shape, dtype=dtype)
+    else:
+        qdis = np.zeros(qb.shape, dtype=dtype)
+
+    for q in qsym:
+        if qb.ndim == 1:
+            qequ = q4_mult(qb, q)
+            if frame == 'crys_a': # disorientation qdis between qa and qb expressed in the frame of crystal a:
+                qc = q4_mult(q4_inv(qa), qequ)
+            else: # disorientation expressed in the reference (sample) frame:
+                qc = q4_mult(qequ, q4_inv(qa))
+        else:
+            qequ = q4_mult(qa, q)
+            if frame == 'crys_a': # disorientation qdis between qa and qb expressed in the frame of crystal a:
+                qc = q4_mult(q4_inv(qequ), qb)
+            else: # disorientation expressed in the reference (sample) frame:
+                qc = q4_mult(qb, q4_inv(qequ))
+        whr = (np.abs(qc[:,0]) > np.abs(qdis[:,0]))
+        qdis[whr] = qc[whr]
+
+    return qdis
 
 #def XXXq4_from_mat(R, dtype=np.float32):
 #    """

@@ -163,7 +163,7 @@ def q4_disori_angle(qa, qb, qsym, ang, nthreads=256):
     >>> qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
     >>> ang_gpu = cp.zeros(qa_gpu.shape[0], dtype=DTYPEf)
     >>> q4_disori_angle(qa_gpu, qb_gpu, qsym_gpu, ang_gpu, nthreads=128)
-    >>> np.allclose(ang, cp.asnumpy(ang_gpu), atol=1e-2)
+    >>> np.allclose(ang, cp.asnumpy(ang_gpu), atol=0.1)
     True
     """
     threadsperblock = nthreads

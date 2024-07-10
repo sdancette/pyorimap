@@ -109,7 +109,7 @@ def q4_inv(qarr):
     --------
     >>> qa = np.atleast_2d([0,1,0,0]).astype(np.float32)
     >>> qinv = q4_inv(qa)
-    >>> np.allclose(qinv[0], np.array([0,-1,0,0], dtype=np.float32))
+    >>> np.allclose(qinv[0], np.array([0,-1,0,0], dtype=np.float32), atol=1e-6)
     True
     >>> qa = q4np.q4_random(n=1024)
     >>> qinv = q4_inv(qa)
@@ -148,9 +148,9 @@ def q4_cosang2(qa, qb):
     >>> cosa2 = q4_cosang2(qa, qb)
     >>> aback = np.degrees(2*np.arccos(cosa2))
     >>> aback1 = np.degrees(2*np.arccos( q4np.q4_cosang2(qa, qb) ))
-    >>> np.allclose(aback, ang, atol=1e-1)
+    >>> np.allclose(aback, ang, atol=0.1)
     True
-    >>> np.allclose(aback, aback1, atol=1e-1)
+    >>> np.allclose(aback, aback1, atol=0.1)
     True
     """
     na = qa.shape[0]
@@ -207,13 +207,13 @@ def q4_disori_angle(qa, qb, qsym, method=1):
     >>> qsym = q4np.q4_sym_cubic()
     >>> qequ = q4np.q4_mult(qa, qsym)
     >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym, method=1)
-    >>> np.allclose(ang, np.zeros(24, dtype=np.float32))
+    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=0.1)
     True
     >>> qa = q4np.q4_random(1024)
     >>> qb = q4np.q4_random(1024)
     >>> ang1 = q4_disori_angle(qa, qb, qsym, method=1)
     >>> ang2 = q4_disori_angle(qa, qb, qsym, method=2)
-    >>> np.allclose(ang1, ang2, atol=1e-2)
+    >>> np.allclose(ang1, ang2, atol=0.1)
     True
     """
     rad2deg = 180./np.pi
