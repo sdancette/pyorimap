@@ -965,7 +965,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32
         qc = q4_mult(q4_inv(qa), qb)
         for isym, q in enumerate(qsym):
             # cosine of the half angle between qc and the ith symmetry operator in qsym:
-            ang1 = q4_cosang2(qc, q)
+            ang1 = np.atleast_1d( q4_cosang2(qc, q) )
             if return_index:
                 whr = (ang1 > ang)
                 ang[whr] = ang1[whr]
@@ -975,7 +975,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32
     else:
         for isym, q in enumerate(qsym):
             qc = q4_mult(qa, q)
-            ang1 = q4_cosang2(qc, qb)
+            ang1 = np.atleast_1d( q4_cosang2(qc, qb) )
             if return_index:
                 whr = (ang1 > ang)
                 ang[whr] = ang1[whr]
@@ -987,7 +987,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32
     else:
         return np.degrees(2*np.arccos(ang))
 
-def q4_disori_quat(qa, qb, qsym, frame='crys_a', dtype=np.float32):
+def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtype=np.float32):
     """
     Disorientation quaternion between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -999,8 +999,13 @@ def q4_disori_quat(qa, qb, qsym, frame='crys_a', dtype=np.float32):
         array of quaternions or single quaternion.
     qsym : ndarray
         quaternion array of symmetry operations.
-    frame : str, default='crys_a'
+    frame : str, default='ref'
         the frame to express the disorientation quaternion, 'ref' or 'crys_a'.
+    method : int, default=1
+        the method to compute disorientation: 1 or 2.
+        Method 1 is faster.
+    return_index : bool, default=False
+        whether to return also the index of the i_th equivalent quaternion yielding minimum disorientation.
 
     Returns
     -------
@@ -1009,31 +1014,66 @@ def q4_disori_quat(qa, qb, qsym, frame='crys_a', dtype=np.float32):
 
     Examples
     --------
-    >>> qa = q4_random(1)
+    >>> qa = np.array([1,0,0,0], dtype=np.float32)
+    >>> qsym = q4_sym_cubic(); isym = 5
+    >>> qb = q4_mult(qa, qsym[isym])
+    >>> qdis_ref = q4_disori_quat(qa, qb, qsym, frame='ref')
+    >>> qdis_cra = q4_disori_quat(qa, qb, qsym, frame='crys_a')
+    >>> np.allclose(qdis_ref, qdis_cra, atol=1e-6)
+    True
+    >>> qa = q4_random(1024)
+    >>> qb = q4_random(1024)
+    >>> ang = q4_disori_angle(qa, qb, qsym)
+    >>> qdis1 = q4_disori_quat(qa, qb, qsym, frame='ref', method=1)
+    >>> qdis2 = q4_disori_quat(qa, qb, qsym, frame='ref', method=2)
+    >>> np.allclose(qdis1, qdis2, atol=1e-6)
+    True
+    >>> ang1 = np.arccos(np.abs(qdis1[:,0]))*2*180/np.pi
+    >>> ang2 = np.arccos(np.abs(qdis2[:,0]))*2*180/np.pi
+    >>> np.allclose(ang, ang1, atol=0.1)
+    True
+    >>> np.allclose(ang, ang2, atol=0.1)
+    True
+    >>> qdis1 = q4_disori_quat(qa, qb, qsym, frame='crys_a', method=1)
+    >>> qdis2 = q4_disori_quat(qa, qb, qsym, frame='crys_a', method=2)
+    >>> np.allclose(qdis1, qdis2, atol=1e-6)
+    True
     """
-    ############ in progress ############
-    if qb.ndim == 1:
-        qdis = np.zeros(qa.shape, dtype=dtype)
-    else:
-        qdis = np.zeros(qb.shape, dtype=dtype)
-
-    for q in qsym:
-        if qb.ndim == 1:
-            qequ = q4_mult(qb, q)
-            if frame == 'crys_a': # disorientation qdis between qa and qb expressed in the frame of crystal a:
-                qc = q4_mult(q4_inv(qa), qequ)
-            else: # disorientation expressed in the reference (sample) frame:
-                qc = q4_mult(qequ, q4_inv(qa))
+    if method == 1:
+        ang, ii = q4_disori_angle(qa, qb, qsym, method=1, return_index=True)
+        qa_inv = q4_inv(q4_mult(qa, qsym[ii]))
+        if frame == 'ref':
+            qdis = q4_mult(qb, qa_inv)
         else:
-            qequ = q4_mult(qa, q)
-            if frame == 'crys_a': # disorientation qdis between qa and qb expressed in the frame of crystal a:
-                qc = q4_mult(q4_inv(qequ), qb)
-            else: # disorientation expressed in the reference (sample) frame:
-                qc = q4_mult(qb, q4_inv(qequ))
-        whr = (np.abs(qc[:,0]) > np.abs(qdis[:,0]))
-        qdis[whr] = qc[whr]
+            qdis = q4_mult(qa_inv, qb)
+    else:
+        if qb.ndim == 1:
+            qdis = np.zeros(qa.shape, dtype=dtype)
+        else:
+            qdis = np.zeros(qb.shape, dtype=dtype)
+        if return_index:
+            ii = np.zeros(np.atleast_2d(qdis).shape[0], dtype=np.uint8)
 
-    return qdis
+        qa_inv = q4_inv(qa)
+        for isym, q in enumerate(qsym):
+            qb_equ = q4_mult(qb, qsym[isym])
+            if frame == 'ref':
+                qtmp = q4_mult(qb_equ, qa_inv)
+            else:
+                qtmp = q4_mult(qa_inv, qb_equ)
+            a0 = np.minimum(np.abs(qdis[...,0]), 1.)
+            a1 = np.minimum(np.abs(qtmp[...,0]), 1.)
+            whr = (a1 > a0)
+            qdis[whr] = qtmp[whr]
+            if return_index:
+                ii[whr] = isym
+
+    qdis = q4_positive(qdis)
+
+    if return_index:
+        return qdis, ii
+    else:
+        return qdis
 
 #def XXXq4_from_mat(R, dtype=np.float32):
 #    """
