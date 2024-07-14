@@ -1011,6 +1011,8 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
     -------
     qdis : ndarray
         quaternion representing the minimum disorientation from `qa` to `qb`, taking `qsym` symmetries into account.
+    ii : ndarray
+        if `return_index`=True, the index of the i_th equivalent quaternion corresponding to the minimum disorientation.
 
     Examples
     --------
@@ -1054,13 +1056,16 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
         if return_index:
             ii = np.zeros(np.atleast_2d(qdis).shape[0], dtype=np.uint8)
 
-        qa_inv = q4_inv(qa)
+        #qa_inv = q4_inv(qa)
         for isym, q in enumerate(qsym):
-            qb_equ = q4_mult(qb, qsym[isym])
+            #qb_equ = q4_mult(qb, q)
+            qa_inv = q4_inv(q4_mult(qa, q))
             if frame == 'ref':
-                qtmp = q4_mult(qb_equ, qa_inv)
+                #qtmp = q4_mult(qb_equ, qa_inv)
+                qtmp = q4_mult(qb, qa_inv)
             else:
-                qtmp = q4_mult(qa_inv, qb_equ)
+                #qtmp = q4_mult(qa_inv, qb_equ)
+                qtmp = q4_mult(qa_inv, qb)
             a0 = np.minimum(np.abs(qdis[...,0]), 1.)
             a1 = np.minimum(np.abs(qtmp[...,0]), 1.)
             whr = (a1 > a0)
