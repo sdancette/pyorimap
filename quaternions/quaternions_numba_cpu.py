@@ -22,7 +22,57 @@ from numba.types import Tuple
 
 DTYPEf = np.float32
 DTYPEi = np.int32
-_EPS = 1e-9
+_EPS = 1e-7
+
+@njit(float32[:,:](float32[:,:], float32), fastmath=True, parallel=True)
+def q4_positive(qarr, _EPS=1e-7):
+    """
+    Return positive quaternion.
+
+    If the first non-zero term of each quaternion is negative,
+    the opposite quaternion is returned, quaternion q and -q
+    representing the same rotation.
+
+    Parameters
+    ----------
+    qarr : array_like
+        (n, 4) array of quaternions or single quaternion of shape (4,).
+    _EPS : float
+        tolerance for non-zero values.
+
+    Returns
+    -------
+    qpos : ndarray
+        array of positive quaternions.
+
+    Examples
+    --------
+    >>> qarr = np.array([[-1,0,0,0], [0,-1,0,0], [0,0,-1,0], [0,0,0,-1]]).astype(np.float32)
+    >>> qpos = q4_positive(qarr, _EPS)
+    >>> np.allclose(qpos, -qarr, atol=1e-6)
+    True
+    """
+    qpos = qarr.copy()
+    n = qpos.shape[0]
+
+    for i in prange(n):
+        opposite = False
+        if (qpos[i,0] < -_EPS):
+            opposite = True
+        elif (qpos[i,0] >= -_EPS)*(qpos[i,0] < _EPS):
+            if (qpos[i,1] < -_EPS):
+                opposite = True
+            elif (qpos[i,1] >= -_EPS)*(qpos[i,1] < _EPS):
+                if (qpos[i,2] < -_EPS):
+                    opposite = True
+                elif (qpos[i,2] >= -_EPS)*(qpos[i,2] < _EPS):
+                    if (qpos[i,3] < -_EPS):
+                        opposite = True
+        if opposite:
+            qpos[i,:] *= -1.
+
+    return qpos
+
 
 @njit(float32[:,:](float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mult(qa, qb):
@@ -323,7 +373,6 @@ def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
         else:
             qdis = q4_mult(qa_inv, qb)
     else:
-        ########## bug present ###########
         if qb.shape[0] == 1:
             qdis = np.zeros(qa.shape, dtype=np.float32)
         else:
@@ -351,7 +400,7 @@ def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
                     qdis[j,:] = qtmp[j,:]
                     ii[j] = isym
 
-    #qdis = q4_positive(qdis)
+    qdis = q4_positive(qdis, _EPS)
 
     return qdis, ii
 

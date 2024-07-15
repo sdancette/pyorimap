@@ -19,6 +19,7 @@ import cupy as cp
 from pyorimap.quaternions import quaternions_np as q4np
 
 from numba import cuda, int32, float32
+from numba.types import Tuple
 
 DTYPEf = np.float32
 DTYPEi = np.int32
@@ -69,9 +70,40 @@ def _kernel_q4_disori_angle(qa, qb, qsym, ang):
 
         for j in range(len(qsym)):
             b1 = _device_q4_cosang2(qc, qsym[j,:])
-            b0= np.maximum(b0, b1)
+            if b1 > b0:
+                b0 = b1
 
         ang[i] = np.arccos(b0) * 2 * 180/np.pi
+
+@cuda.jit((float32[:,:], float32[:,:], float32[:,:], float32[:,:], int32), fastmath=True)
+def _kernel_q4_disori_quat(qa, qb, qsym, qdis, frame):
+    i = cuda.grid(1)
+    if i < qa.shape[0]:
+        # initialize arrays:
+        b0 = 0.
+        qa_inv = cuda.local.array(shape=4, dtype=float32)
+        qc = cuda.local.array(shape=4, dtype=float32)
+
+        ### identify the i_th symmetry corresponding to the smallest misorientation:
+        # disorientation qc expressed in the frame of crystal a:
+        _device_q4_inv(qa[i,:], qa_inv)
+        _device_q4_mult(qa_inv, qb[i,:], qc)
+
+        isym = 0
+        for j in range(len(qsym)):
+            b1 = _device_q4_cosang2(qc, qsym[j,:])
+            if b1 > b0:
+                b0 = b1
+                isym = j
+
+        # express disorientation quaternion with i_th symmetry:
+        _device_q4_mult(qa[i,:], qsym[isym,:], qc)
+        _device_q4_inv(qc, qa_inv)
+        if frame == 0:
+            _device_q4_mult(qb[i,:], qa_inv, qdis[i,:])
+        else:
+            _device_q4_mult(qa_inv, qb[i,:], qdis[i,:])
+
 
 def q4_mult(qa, qb, qc, nthreads=256):
     """
@@ -169,6 +201,49 @@ def q4_disori_angle(qa, qb, qsym, ang, nthreads=256):
     threadsperblock = nthreads
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_q4_disori_angle[blockspergrid, threadsperblock](qa, qb, qsym, ang)
+
+def q4_disori_quat(qa, qb, qsym, qdis, frame=0, nthreads=256):
+    """
+    Wrapper calling the kernel to compute disorientation quaternion between
+    `qa` and `qb` accounting for `qsym` symmetries.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion on GPU memory.
+    qb : ndarray
+        array of quaternions or single quaternion on GPU memory.
+    qsym : ndarray
+        quaternion array of symmetry operations on GPU memory.
+    qdis : ndarray
+        disorientation quaternion between quaternions `qa` and `qb`,
+        taking symmetries into account, modified in place on GPU memory.
+    frame : int, default=0
+        the frame to express the disorientation quaternion, 0='ref' or 1='crys_a'.
+
+    Examples
+    --------
+    >>> qa = q4np.q4_random(1024)
+    >>> qb = qa[::-1,:]
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> qdis = q4np.q4_disori_quat(qa, qb, qsym, frame='ref')
+    >>> qa_gpu = cp.asarray(qa, dtype=DTYPEf)
+    >>> qb_gpu = cp.asarray(qb, dtype=DTYPEf)
+    >>> qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
+    >>> qdis_gpu = cp.zeros_like(qa_gpu)
+    >>> q4_disori_quat(qa_gpu, qb_gpu, qsym_gpu, qdis_gpu, frame=0, nthreads=128)
+    >>> np.allclose(qdis, q4np.q4_positive(cp.asnumpy(qdis_gpu)), atol=1e-6)
+    True
+    >>> qdis = q4np.q4_disori_quat(qa, qb, qsym, frame='crys_a')
+    >>> q4_disori_quat(qa_gpu, qb_gpu, qsym_gpu, qdis_gpu, frame=1, nthreads=128)
+    >>> np.allclose(qdis, q4np.q4_positive(cp.asnumpy(qdis_gpu)), atol=1e-6)
+    True
+    """
+    threadsperblock = nthreads
+    blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_q4_disori_quat[blockspergrid, threadsperblock](qa, qb, qsym, qdis, frame)
 
 if __name__ == "__main__":
     import doctest
