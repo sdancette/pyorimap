@@ -21,7 +21,7 @@ from pyorimap.orimap import orientation_map as om
 DTYPEf = np.float32
 DTYPEi = np.int32
 
-def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=[1,2], fvol=None, phase_to_crys=None):
+def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=1, fvol=None, phase_to_crys=None, theta_spread=None):
     """
     Generate a random Voronoi microstructure and return an OriMap object
     (inheriting from pyvista ImageData object).
@@ -57,8 +57,9 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
 
     Examples
     --------
+    >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, theta_spread=1.)
     >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, phases=[0,1,2,4], fvol={0:0.15, 1:0.4, 2:0.4, 4:0.05})
-    >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, phases=5)
+    >>> mic = Voronoi_microstructure(dimensions=(64,64,64), spacing=1, ngrains=5**3, phases=5, theta_spread=5.)
     """
     logging.info("#### Starting to build virtual microstructure. ####")
 
@@ -66,10 +67,6 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     phases = np.atleast_1d(phases).astype(np.uint8)
     phases.sort()
     nphases = len(phases)
-
-    ############################################################################################
-    # default generation of microstructure with a single phase (phases anf fvol not explicitly specifies) needs to be checked
-    ############################################################################################
 
     # check consistent phase input:
     if nphases > 1:
@@ -175,7 +172,11 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
 
     qseeds = q4np.q4_random(ngrains)
     eulseeds = q4np.q4_to_eul(qseeds)
-    grid.qarray = qseeds[grains,:]
+    if theta_spread is None:
+        grid.qarray = qseeds[grains,:]
+    else:
+        qspread = q4np.q4_orispread(ncrys=len(grains), thetamax=theta_spread, misori=True)
+        grid.qarray = q4np.q4_mult(qseeds[grains,:], qspread)
 
     grdata.grain = unic + 1
     grdata.phase = grid.cell_data['phase'][indices]
