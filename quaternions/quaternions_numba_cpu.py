@@ -388,11 +388,6 @@ def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
             else:
                 qtmp = q4_mult(qa_inv, qb)
 
-            #a0 = np.minimum(np.abs(qdis[:,0]), 1.)
-            #a1 = np.minimum(np.abs(qtmp[:,0]), 1.)
-            #whr = (a1 > a0)
-            #qdis[whr] = qtmp[whr]
-            #ii[whr] = isym
             for j in prange(n):
                 a0 = min(abs(qdis[j,0]), 1.)
                 a1 = min(abs(qtmp[j,0]), 1.)
@@ -403,6 +398,97 @@ def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
     qdis = q4_positive(qdis, _EPS)
 
     return qdis, ii
+
+@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
+def q4_mean_disori(qarr, qsym):
+    """
+    Average orientation and disorientation (GOS and GROD).
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+
+    Returns
+    -------
+    qavg : ndarray
+        quaternion representing the average orientation of `qarr`.
+    GROD : ndarray
+        (n,) array of grain reference orientation deviation in degrees.
+    GROD_stat : ndarray
+        [mean, std, min, Q1, median, Q3, max] of the grain reference orientation deviation (GROD).
+        GROD_stat[0] is the grain orientation spread (GOS), i.e. the average disorientation angle in degrees.
+    theta_iter : ndarray
+        convergence angle (degree) during the iterations for `qavg`.
+
+    Examples
+    --------
+    >>> qa = np.atleast_2d(q4np.q4_random(1))
+    >>> qarr = q4_mult(qa, q4np.q4_orispread(ncrys=1024, thetamax=2., misori=True))
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> qavg, GROD, GROD_stat, theta_iter = q4_mean_disori(qarr, qsym)
+    >>> np.allclose(qa[0], qavg, atol=1e-3)
+    True
+    >>> qavg2, GROD2, GROD_stat2, theta_iter2 = q4np.q4_mean_disori(qarr, qsym)
+    >>> np.allclose(qavg, qavg2, atol=1e-3)
+    True
+    >>> np.allclose(GROD, GROD2, atol=0.5)
+    True
+    """
+
+    ii = 0
+    theta= 999.
+    nitermax = 10
+    theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
+    ncrys = qarr.shape[0]
+    while (theta > 0.1) and (ii < nitermax):
+        if ii == 0:
+            # initialize avg orientation:
+            qref = qarr[0:1,:]
+
+        # disorientation of each crystal wrt average orientation:
+        qdis, _ = q4_disori_quat(qref, qarr, qsym, frame=1, method=1)
+
+        qtmp = np.zeros((1,4), dtype=DTYPEf)
+        for j in prange(ncrys):
+            qtmp[0,0] += qdis[j,0]
+            qtmp[0,1] += qdis[j,1]
+            qtmp[0,2] += qdis[j,2]
+            qtmp[0,3] += qdis[j,3]
+        qtmp /= np.sqrt(qtmp[0,0]**2 + qtmp[0,1]**2 + qtmp[0,2]**2 + qtmp[0,3]**2)
+
+        # q_mean=q_ref*q_sum/|q_sum|
+        qavg = q4_mult(qref, qtmp)
+
+        #### theta for convergence of qavg:
+        theta = np.arccos(q4_cosang2(qref, qavg)[0])*2*180/np.pi
+        theta_iter[ii] = theta
+        #theta_iter[ii] = 0.
+        qref = qavg
+
+        ii += 1
+
+    # angles:
+    GROD = np.zeros(ncrys, dtype=DTYPEf)
+    for j in prange(ncrys):
+        GROD[j] = np.arccos(min(abs(qdis[j,0]), 1.))*2*180/np.pi
+
+    GOS = GROD.mean()
+    GROD_stat = np.array([GOS,
+                 GROD.std(),
+                 GROD.min(),
+                 np.quantile(GROD, 0.25),
+                 np.median(GROD),
+                 np.quantile(GROD, 0.75),
+                 GROD.max()], dtype=DTYPEf)
+    qavg = qavg[0,:]
+    theta_iter = theta_iter.astype(DTYPEf)
+    theta_iter = theta_iter[theta_iter >= 0.]
+
+    return qavg, GROD, GROD_stat, theta_iter
+
 
 if __name__ == "__main__":
     import doctest
