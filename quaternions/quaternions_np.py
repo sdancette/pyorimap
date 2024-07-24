@@ -7,6 +7,7 @@ Quaternion operations applied to (poly)crystals using regular numpy.
 
 This module contains the following functions:
 
+- `q4_positive(qarr)` - return positive quaternion
 - `q4_sym_cubic()` - generate quaternions for cubic crystal symmetry
 - `q4_sym_hex()` - generate quaternions for hexagonal crystal symmetry
 - `q4_sym_tetra()` - generate quaternions for tetragonal crystal symmetry
@@ -24,6 +25,9 @@ This module contains the following functions:
 - `transpose_mat(R)` - transpose the array of rotation matrices
 - `q4_cosang2(qa, qb)` - cosine of the half angle between `qa` and `qb`
 - `q4_disori_angle(qa, qb, qsym)` - compute the disorientation angle between `qa` and  `qb` (taking symmetries into account)
+- `q4_disori_quat(qa, qb, qsym, frame)` - compute the disorientation quaternion between `qa` and  `qb` (taking symmetries into account)
+- `q4_mean_disori(qarr, qsym)` - compute the average orientation and disorientation (GOS and GROD)
+- `q4_orispread(ncrys, thetamax, misori)` - generate an orientation spread
 """
 
 import logging
@@ -1079,6 +1083,136 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
         return qdis, ii
     else:
         return qdis
+
+def q4_mean_disori(qarr, qsym):
+    """
+    Average orientation and disorientation (GOS and GROD).
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+
+    Returns
+    -------
+    qavg : ndarray
+        quaternion representing the average orientation of `qarr`.
+    GOS : float
+        grain orientation spread, i.e. the average disorientation angle in degrees.
+    GROD : ndarray
+        (n,) array of grain reference orientation deviation in degrees.
+    GROD_stat : ndarray
+        [std, min, Q1, median, Q3, max] of the grain reference orientation deviation (GROD).
+
+    Examples
+    --------
+    >>> qa = q4_random(1)
+    >>> qarr = q4_mult(qa, q4_orispread(ncrys=1024, thetamax=1., misori=True))
+    >>> qsym = q4_sym_cubic()
+    >>> qavg, GOS, GROD, GROD_stat = q4_mean_disori(qarr, qsym)
+    >>> np.allclose(qa, qavg, atol=1e-3)
+    True
+    """
+
+    ii = 0
+    theta= 999.
+    thetalist = []
+    while (theta>0.1) and (ii<10):
+        if ii == 0:
+            # initialize avg orientation:
+            qref = qarr[0,:]
+
+        # disorientation of each crystal wrt average orientation:
+        qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)
+
+        qtmp = np.sum(qdis, axis=0)
+        qtmp /= np.sqrt(np.einsum('...i,...i', qtmp, qtmp))
+        #qtmp /= np.sqrt(np.sum(qtmp**2)) # slower ?
+
+        # q_mean=q_ref*q_sum/|q_sum|
+        qavg = q4_mult(qref, qtmp)
+
+        # angles:
+        GROD = np.minimum(np.abs(qdis[:,0]), 1.)
+        GROD = np.arccos(GROD)*2*180/np.pi
+
+        GOS = GROD.mean()
+        GROD_stat = [GROD.std(),
+                     GROD.min(),
+                     np.quantile(GROD, 0.25),
+                     np.median(GROD),
+                     np.quantile(GROD, 0.75),
+                     GROD.max()]
+
+        #### theta for convergence of qavg:
+        theta = np.arccos(q4_cosang2(qref, qavg))*2*180/np.pi
+        thetalist.append(theta)
+        qref = qavg
+
+        ii += 1
+
+    logging.info("Computed average grain orientation over {} crystals in {} iterations.".format(len(qarr), ii))
+    logging.info("Theta convergence (degrees): {}".format(thetalist))
+
+    return qavg, GOS, GROD, GROD_stat
+
+def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
+    """
+    Generate an orientation spread.
+
+    Implementation derived from orilib routines by R. Quey at <https://sourceforge.net/projects/orilib/>.
+
+    Parameters
+    ----------
+    ncrys : int, default=1024
+        number of crystals in the distribution to be generated.
+    thetamax : float, default=1.0
+        maximum disorientation angle in the distribution.
+    misori : bool, default=True
+        whether to compute an orientation spread or a misorientation spread.
+        The distribution of the misorientation angles is uniform only if misori=True
+
+    Returns
+    -------
+    qarr : ndarray
+        (`ncrys`, 4) array of quaternions in the distribution.
+
+    Examples
+    --------
+    >>> qarr = q4_orispread(ncrys=1024, thetamax=2., misori=True)
+    >>> qsym = q4_sym_cubic()
+    >>> qavg, GOS, _, _ = q4_mean_disori(qarr, qsym)
+    >>> np.allclose(qavg, np.array([1,0,0,0], dtype=DTYPEf), atol=1e-3)
+    True
+    >>> np.allclose(1., GOS, atol=0.1)
+    True
+    """
+    rand = np.random.rand(ncrys, 3).astype(DTYPEf)
+    qarr = np.zeros((ncrys, 4), dtype=dtype)
+
+    alpha = np.arccos (2. * rand[:,0] - 1)
+    beta  = 2. * np.pi * rand[:,1]
+
+    # temporarily storing the axis vector:
+    qarr[:,1] = np.sin(alpha) * np.cos(beta)
+    qarr[:,2] = np.sin(alpha) * np.sin(beta)
+    qarr[:,3] = np.cos(alpha)
+
+    thetamax = thetamax % 180.
+    thetamax *= np.pi / 180.
+    if misori:
+        theta = thetamax * rand[:,2]
+    else:
+        theta = thetamax * rand[:,2]**(1./3.)
+
+    qarr[:,0] = np.cos(theta/2.)
+    qarr[:,1] *= np.sin(theta/2.)
+    qarr[:,2] *= np.sin(theta/2.)
+    qarr[:,3] *= np.sin(theta/2.)
+
+    return qarr
 
 #def XXXq4_from_mat(R, dtype=np.float32):
 #    """
