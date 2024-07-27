@@ -104,7 +104,6 @@ def _kernel_q4_disori_quat(qa, qb, qsym, qdis, frame):
         else:
             _device_q4_mult(qa_inv, qb[i,:], qdis[i,:])
 
-
 def q4_mult(qa, qb, qc, nthreads=256):
     """
     Wrapper calling the kernel to compute quaternion multiplication

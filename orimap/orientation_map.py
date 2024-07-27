@@ -231,7 +231,7 @@ class OriMap(pv.ImageData):
         Compute grains based on disorientation with cell neighbors.
 
         Cell neighborhood is defined by a structuring element
-        with the input `radius` and `connectivity`.
+        with the input `radius` and `connectivity` as defined in self.params.selem.
         """
         self._get_neighborhood()
 
@@ -239,61 +239,8 @@ class OriMap(pv.ImageData):
             self._build_cell_graph(symmetric=False)
             self._get_connected_components()
             self._filter_grains()
+            self._get_grain_average()
         self.save(self.params.filename[:-4]+'.vtk')
-
-    def _xyz_to_index(self, x, y, z, mode='cells', method=1):
-        """
-        Return the cell/point indices in the grid from (x,y,z) coordinates.
-        """
-        if mode == 'cells':
-            nx, ny, nz = self.dimensions[0]-1, self.dimensions[1]-1, self.dimensions[2]-1
-        elif mode == 'points':
-            nx, ny, nz = self.dimensions[0], self.dimensions[1], self.dimensions[2]
-        dx, dy, dz = self.spacing
-        ox, oy, oz = self.bounds[0], self.bounds[2], self.bounds[4]
-
-        x = np.round((x-ox)/dx).astype(DTYPEi)
-        y = np.round((y-oy)/dy).astype(DTYPEi)
-        z = np.round((z-oz)/dz).astype(DTYPEi)
-        checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
-
-        if method == 1:
-            z *= nx*ny
-            y *= nx
-            ii = z + y + x
-            ii[~checkxyz] = -1
-        else:
-            ii = np.zeros(len(x), dtype=DTYPEi) - 1
-            x = x[checkxyz]
-            y = y[checkxyz]
-            z = z[checkxyz]
-            ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
-        return ii
-
-    def _index_to_xyz(self, ii, mode='cells', method=1):
-        """
-        Return (x,y,z) coordinates in the grid from cell/point indices.
-        """
-        if mode == 'cells':
-            nx, ny, nz = self.dimensions[0]-1, self.dimensions[1]-1, self.dimensions[2]-1
-        elif mode == 'points':
-            nx, ny, nz = self.dimensions[0], self.dimensions[1], self.dimensions[2]
-        dx, dy, dz = self.spacing
-        ox, oy, oz = self.bounds[0], self.bounds[2], self.bounds[4]
-
-        if method == 1:
-            quo1, rem1 = np.divmod(ii, nx*ny)
-            z = quo1*dz + oz
-            quo2, rem2 = np.divmod(rem1, nx)
-            y = quo2*dy + oy
-            x = rem2*dx + ox
-        else:
-            z,y,x = np.unravel_index(ii, (nz,ny,nx))
-            z = z*dz + oz
-            y = y*dy + oy
-            x = x*dx + ox
-
-        return np.column_stack((x,y,z)).astype(DTYPEf)
 
     def _get_cell_coords_from_points(self, method=1):
         """
@@ -348,13 +295,13 @@ class OriMap(pv.ImageData):
         dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
         z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
 
+        dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
+        spacing = np.array(list(self.spacing), dtype=DTYPEf)
+        bounds = np.array(list(self.bounds), dtype=DTYPEf)
         if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'cupy'):
-            dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
-            spacing = np.array(list(self.spacing), dtype=DTYPEf)
-            bounds = np.array(list(self.bounds), dtype=DTYPEf)
             ii = xyz_to_index_numba(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode=1)
         else:
-            ii = self._xyz_to_index(x+dx, y+dy, z+dz, mode='cells')
+            ii = xyz_to_index(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode='cells')
         return ii
 
     def _get_disori_by_phase(self):
@@ -371,7 +318,7 @@ class OriMap(pv.ImageData):
         except AttributeError:
             self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
 
-        if self.params.compute_mode == 'cupy':
+        if (self.params.compute_mode == 'cupy') or (self.params.compute_mode == 'numba_gpu'):
             qarr_gpu = cp.asarray(self.qarray)
 
         # loop by phase ID for disorientation calculation:
@@ -398,11 +345,17 @@ class OriMap(pv.ImageData):
                 self.params.phase_to_crys[phi].get_qsym()
                 qsym = self.params.phase_to_crys[phi].qsym
 
-            if self.params.compute_mode == 'cupy':
+            if (self.params.compute_mode == 'numba_gpu'):
                 qsym_gpu = cp.asarray(qsym)
                 qa_gpu = qarr_gpu[whrPhi]
+                deso_gpu = cp.asarray(self.deso[whrPhi])
+                print('GPU mem, start, used:', mempool.used_bytes()/1024**2)
+                print('GPU mem, start, total:', mempool.total_bytes()/1024**2)
+            elif (self.params.compute_mode == 'cupy'):
+                qsym_gpu = cp.asarray(qsym)
+                qa_gpu = qarr_gpu[whrPhi]
+                deso_gpu = cp.asarray(self.deso[whrPhi])
                 qc_gpu = cp.zeros_like(qa_gpu)
-                deso_gpu = cp.asarray(self.deso[whrPhi]) #+ 3000.
                 a1_gpu = cp.zeros_like(deso_gpu[:,0])
                 print('GPU mem, start, used:', mempool.used_bytes()/1024**2)
                 print('GPU mem, start, total:', mempool.total_bytes()/1024**2)
@@ -416,26 +369,35 @@ class OriMap(pv.ImageData):
 
                 if self.params.compute_mode == 'numba_cpu':
                     qb = self.qarray[theNeb]
-                    deso[:,ineb] = q4nCPU.q4_disori_angle(qa, qb, qsym, method=1)
+                    deso[:,ineb], _ = q4nCPU.q4_disori_angle(qa, qb, qsym, method=1)
+                elif self.params.compute_mode == 'numba_gpu':
+                    qb_gpu = qarr_gpu[theNeb]
+                    q4nGPU.q4_disori_angle(qa_gpu, qb_gpu, qsym_gpu, deso_gpu[:,ineb], nthreads=256)
+                    print('GPU mem, middle, used:', mempool.used_bytes()/1024**2)
+                    print('GPU mem, middle, total:', mempool.total_bytes()/1024**2)
+                    qb_gpu = qb_gpu[0:1]*0. # free memory for next neighbor
                 elif self.params.compute_mode == 'cupy':
                     qb_gpu = qarr_gpu[theNeb]
                     q4cp.q4_disori_angle(qa_gpu, qb_gpu, qc_gpu, qsym_gpu,
                                          deso_gpu[:,ineb], a1_gpu, method=1, revertqa=True)
                     print('GPU mem, middle, used:', mempool.used_bytes()/1024**2)
                     print('GPU mem, middle, total:', mempool.total_bytes()/1024**2)
-
                     qb_gpu = qb_gpu[0:1]*0. # free memory for next neighbor
+                else: # default to numpy mode:
+                    qb = self.qarray[theNeb]
+                    deso[:,ineb] = q4np.q4_disori_angle(qa, qb, qsym, method=1, return_index=False)
 
-            # transfer results and reset gpu_arrays before jumping to next phase if cupy:
-            if self.params.compute_mode == 'cupy':
+            # transfer results and reset gpu_arrays before jumping to next phase if cupy or numba_gpu:
+            if (self.params.compute_mode == 'cupy') or (self.params.compute_mode == 'numba_gpu'):
                 self.deso[whrPhi] = cp.asnumpy(deso_gpu)
 
                 # free memory for next phase:
                 qsym_gpu = qsym_gpu[0:1]*0.
                 qa_gpu =   qa_gpu[0:1]*0.
-                qc_gpu =   qc_gpu[0:1]*0.
                 deso_gpu = deso_gpu[0:1]*0.
-                a1_gpu = a1_gpu[0:1]
+                if (self.params.compute_mode == 'cupy'):
+                    qc_gpu =   qc_gpu[0:1]*0.
+                    a1_gpu = a1_gpu[0:1]
             else:
                 self.deso[whrPhi] = deso
 
@@ -450,7 +412,7 @@ class OriMap(pv.ImageData):
             self.deso[:,ineb][~whrNeb] = 362.
             logging.info("... ineb {}".format(ineb))
 
-        if self.params.compute_mode == 'cupy':
+        if (self.params.compute_mode == 'cupy') or (self.params.compute_mode == 'numba_gpu'):
             qarr_gpu = qarr_gpu[0:1]*0.
             mempool.free_all_blocks()
             pinned_mempool.free_all_blocks()
@@ -517,6 +479,53 @@ class OriMap(pv.ImageData):
         logging.info("Finished to relabel {} grains with min size {} and min phase {}.".format(unic.max(), nmin, phimin))
 
         return unic, counts
+
+    def _get_grain_average(self):
+        """
+        Compute average orientation, GOS and GROD, grain by grain.
+        """
+        grains = self.cell_data['grains']
+        phase = self.cell_data['phase']
+        GROD = np.zeros(grains.shape, dtype=DTYPEf)
+        GOS = np.zeros(grains.shape, dtype=DTYPEf)
+
+        logging.info("Starting to compute grain average orientation and GROD.")
+
+        unic, counts = np.unique(grains, return_counts=True)
+        labcount = np.column_stack((unic, counts, np.cumsum(counts)))
+        labcount = np.rec.array( unstructured_to_structured(labcount, dtype=[('lab', DTYPEi), ('count', DTYPEi), ('cum', DTYPEi)]) )
+
+        grind = np.column_stack((grains, np.arange(grains.size)))
+        grind = np.rec.array( unstructured_to_structured(grind, dtype=[('lab', DTYPEi), ('index', DTYPEi)]) )
+        grind.sort()
+
+        for ilab, lab in enumerate(labcount.lab):
+            if ilab == 0:
+                indices = grind.index[0:labcount.cum[ilab]]
+            else:
+                indices = grind.index[labcount.cum[ilab-1]:labcount.cum[ilab]]
+            #print("lab, indices:", lab, indices)
+
+            if lab == 0:
+                GROD[indices] = 0.
+                GOS[indices] = 0.
+                continue
+
+            qlab = self.qarray[indices]
+
+            phi = phase[indices][0]
+            qsym = self.params.phase_to_crys[phi].qsym
+            if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'numba_gpu'):
+                qavg, GROD[indices], GROD_stat, theta_iter = q4nCPU.q4_mean_disori(qlab, qsym)
+            else:
+                qavg, GROD[indices], GROD_stat, theta_iter = q4np.q4_mean_disori(qlab, qsym)
+            GOS[indices] = GROD_stat[0]
+
+        self.cell_data['GROD'] = GROD
+        self.cell_data['GOS'] = GOS
+
+        logging.info("Finished to compute grain average orientation and GROD.")
+
 
     def _save_phase_info(self):
         """
@@ -728,6 +737,62 @@ def read_from_vtk(filename):
     logging.info("Finished reading from {}.".format(filename))
 
     return orimap
+
+def xyz_to_index(x, y, z, dimensions, spacing, bounds, mode='cells', method=1):
+    """
+    Return the cell/point indices in the grid from (x,y,z) coordinates.
+    """
+    if mode == 'cells':
+        nx, ny, nz = dimensions[0]-1, dimensions[1]-1, dimensions[2]-1
+    elif mode == 'points':
+        nx, ny, nz = dimensions[0], dimensions[1], dimensions[2]
+    dx, dy, dz = spacing
+    ox, oy, oz = bounds[0], bounds[2], bounds[4]
+
+    x = np.round((x-ox)/dx).astype(DTYPEi)
+    y = np.round((y-oy)/dy).astype(DTYPEi)
+    z = np.round((z-oz)/dz).astype(DTYPEi)
+    checkxyz = (x >= 0)*(x < nx)*(y >= 0)*(y < ny)*(z >= 0)*(z < nz)
+
+    if method == 1:
+        z *= nx*ny
+        y *= nx
+        ii = z + y + x
+        ii[~checkxyz] = -1
+    else:
+        ii = np.zeros(len(x), dtype=DTYPEi) - 1
+        x = x[checkxyz]
+        y = y[checkxyz]
+        z = z[checkxyz]
+        ii[checkxyz] = np.ravel_multi_index([z,y,x],(nz,ny,nx))
+
+    return ii
+
+def index_to_xyz(ii, dimensions, spacing, bounds, mode='cells', method=1):
+    """
+    Return (x,y,z) coordinates in the grid from cell/point indices.
+    """
+    if mode == 'cells':
+        nx, ny, nz = dimensions[0]-1, dimensions[1]-1, dimensions[2]-1
+    elif mode == 'points':
+        nx, ny, nz = dimensions[0], dimensions[1], dimensions[2]
+    dx, dy, dz = spacing
+    ox, oy, oz = bounds[0], bounds[2], bounds[4]
+
+    if method == 1:
+        quo1, rem1 = np.divmod(ii, nx*ny)
+        z = quo1*dz + oz
+        quo2, rem2 = np.divmod(rem1, nx)
+        y = quo2*dy + oy
+        x = rem2*dx + ox
+    else:
+        z,y,x = np.unravel_index(ii, (nz,ny,nx))
+        z = z*dz + oz
+        y = y*dy + oy
+        x = x*dx + ox
+
+    return np.column_stack((x,y,z)).astype(DTYPEf)
+
 
 @njit(int32[:](float32[:],float32[:],float32[:],int32[:],float32[:],float32[:],int8), fastmath=True, parallel=True)
 def xyz_to_index_numba(x, y, z, dimensions, spacing, bounds, mode=1):
