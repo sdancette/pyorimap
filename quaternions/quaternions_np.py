@@ -1132,7 +1132,7 @@ def q4_mean_disori(qarr, qsym):
         # disorientation of each crystal wrt average orientation:
         qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)
 
-        qtmp = np.sum(qdis, axis=0)
+        qtmp = np.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
         qtmp /= np.sqrt(np.einsum('...i,...i', qtmp, qtmp))
         #qtmp /= np.sqrt(np.sum(qtmp**2)) # slower ?
 

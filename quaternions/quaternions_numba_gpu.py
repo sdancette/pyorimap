@@ -308,7 +308,7 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
                        qarr, qsym, qdis, frame=1, nthreads=256) ## check kernel with unbalanced shape of qa and qb in q4_disori !
 
         #### reduction kernel to be implemented...
-        qtmp = cp.sum(qdis, axis=0)
+        qtmp = cp.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
         qtmp /= cp.sqrt(cp.einsum('...i,...i', qtmp, qtmp))
         #qtmp /= cp.sqrt(cp.sum(qtmp**2)) # slower ?
         #qtmp /= cp.sqrt(qtmp[0,0]**2 + qtmp[0,1]**2 + qtmp[0,2]**2 + qtmp[0,3]**2)

@@ -298,7 +298,7 @@ class OriMap(pv.ImageData):
         dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
         spacing = np.array(list(self.spacing), dtype=DTYPEf)
         bounds = np.array(list(self.bounds), dtype=DTYPEf)
-        if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'cupy'):
+        if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'numba_gpu') or (self.params.compute_mode == 'cupy'):
             ii = xyz_to_index_numba(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode=1)
         else:
             ii = xyz_to_index(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode='cells')
@@ -515,7 +515,20 @@ class OriMap(pv.ImageData):
 
             phi = phase[indices][0]
             qsym = self.params.phase_to_crys[phi].qsym
-            if (self.params.compute_mode == 'numba_cpu') or (self.params.compute_mode == 'numba_gpu'):
+            if (self.params.compute_mode == 'numba_gpu'):
+                qa_gpu = cp.asarray(qlab, dtype=DTYPEf)
+                qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
+                qavg_gpu = cp.zeros((1,4), dtype=DTYPEf)
+                GROD_gpu = cp.zeros(len(qlab), dtype=DTYPEf)
+                GROD_stat_gpu = cp.zeros(7, dtype=DTYPEf)
+                theta_iter_gpu = cp.zeros(10, dtype=DTYPEf)
+                q4nGPU.q4_mean_disori(qa_gpu, qsym_gpu, qavg_gpu, GROD_gpu, GROD_stat_gpu, theta_iter_gpu)
+
+                qavg = cp.asnumpy(qavg_gpu)
+                GROD[indices] = cp.asnumpy(GROD_gpu)
+                GROD_stat = cp.asnumpy(GROD_stat_gpu)
+                theta_iter = cp.asnumpy(theta_iter_gpu)
+            elif (self.params.compute_mode == 'numba_cpu'):
                 qavg, GROD[indices], GROD_stat, theta_iter = q4nCPU.q4_mean_disori(qlab, qsym)
             else:
                 qavg, GROD[indices], GROD_stat, theta_iter = q4np.q4_mean_disori(qlab, qsym)

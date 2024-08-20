@@ -462,7 +462,7 @@ def q4_mean_disori(qarr, qsym):
         #    qtmp[0,1] += qdis[j,1]
         #    qtmp[0,2] += qdis[j,2]
         #    qtmp[0,3] += qdis[j,3]
-        qtmp[0] = np.sum(qdis, axis=0)
+        qtmp[0] = np.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
         qtmp /= np.sqrt(qtmp[0,0]**2 + qtmp[0,1]**2 + qtmp[0,2]**2 + qtmp[0,3]**2)
 
         # q_mean=q_ref*q_sum/|q_sum|
