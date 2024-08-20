@@ -244,6 +244,104 @@ def q4_disori_quat(qa, qb, qsym, qdis, frame=0, nthreads=256):
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_q4_disori_quat[blockspergrid, threadsperblock](qa, qb, qsym, qdis, frame)
 
+def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
+    """
+    Average orientation and disorientation (GOS and GROD).
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions on GPU memory.
+    qsym : ndarray
+        quaternion array of symmetry operations on GPU memory.
+    qavg : ndarray
+        quaternion representing the average orientation of `qarr`, modified in place on GPU memory.
+    GROD : ndarray
+        (n,) array of grain reference orientation deviation in degrees, modified in place on GPU memory.
+    GROD_stat : ndarray
+        [mean, std, min, Q1, median, Q3, max] of the grain reference orientation deviation (GROD), modified in place on GPU memory.
+        GROD_stat[0] is the grain orientation spread (GOS), i.e. the average disorientation angle in degrees.
+    theta_iter : ndarray
+        convergence angle (degree) during the iterations for `qavg`, modified in place on GPU memory.
+
+    Examples
+    --------
+    >>> qa = q4np.q4_random(1)
+    >>> qarr = cp.asarray(q4np.q4_mult(qa, q4np.q4_orispread(ncrys=1024, thetamax=2., misori=True)), dtype=DTYPEf)
+    >>> qsym = cp.asarray(q4np.q4_sym_cubic())
+    >>> qavg = cp.zeros((1,4), dtype=DTYPEf)
+    >>> GROD = cp.zeros(1024, dtype=DTYPEf)
+    >>> GROD_stat = cp.zeros(7, dtype=DTYPEf)
+    >>> theta_iter = cp.zeros(10, dtype=DTYPEf)
+    >>> q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter)
+    >>> deso = np.arccos(q4np.q4_cosang2(qa, cp.asnumpy(qavg[0])))*2*180/np.pi
+    >>> (deso < 0.1)
+    True
+    >>> np.allclose(qa, cp.asnumpy(qavg[0]), atol=1e-3)
+    True
+    >>> qavg2, GROD2, GROD_stat2, theta_iter2 = q4np.q4_mean_disori(cp.asnumpy(qarr), cp.asnumpy(qsym))
+    >>> np.allclose(cp.asnumpy(qavg[0]), qavg2, atol=1e-3)
+    True
+    >>> np.allclose(cp.asnumpy(GROD), GROD2, atol=0.5)
+    True
+    """
+
+    ii = 0
+    theta= 999.
+    nitermax = 10
+    theta_iter -= 1.
+    ncrys = qarr.shape[0]
+
+    qdis = cp.zeros_like(qarr)
+    #qavg = cp.zeros((1,4), dtype=DTYPEf)
+    while (theta > 0.1) and (ii < nitermax):
+        if ii == 0:
+            # initialize avg orientation:
+            qref = qarr[0:1,:]
+
+        # disorientation of each crystal wrt average orientation:
+        qdis *= 0.
+        #print(qref)
+        q4_disori_quat(cp.tile(qref[0], len(qarr)).reshape(-1,4),
+                       qarr, qsym, qdis, frame=1, nthreads=256) ## check kernel with unbalanced shape of qa and qb in q4_disori !
+
+        #### reduction kernel to be implemented...
+        qtmp = cp.sum(qdis, axis=0)
+        qtmp /= cp.sqrt(cp.einsum('...i,...i', qtmp, qtmp))
+        #qtmp /= cp.sqrt(cp.sum(qtmp**2)) # slower ?
+        #qtmp /= cp.sqrt(qtmp[0,0]**2 + qtmp[0,1]**2 + qtmp[0,2]**2 + qtmp[0,3]**2)
+
+        # q_mean=q_ref*q_sum/|q_sum|
+        q4_mult(qref, cp.atleast_2d(qtmp).astype(cp.float32), qavg)
+
+        #### theta for convergence of qavg:
+        theta = cp.arccos( min(abs(qref[0,0]*qavg[0,0] +
+                                   qref[0,1]*qavg[0,1] +
+                                   qref[0,2]*qavg[0,2] +
+                                   qref[0,3]*qavg[0,3]), 1.), dtype=DTYPEf)*2*180/cp.pi
+        theta_iter[ii] = theta
+        qref = qavg
+        ii += 1
+
+    # angles:
+    GROD[:] = cp.arccos(cp.minimum(cp.abs(qdis[:,0]), 1.))*2*180/cp.pi
+
+    GOS = GROD.mean()
+    GROD_stat[0] = GOS
+    GROD_stat[1] = GROD.std()
+    GROD_stat[2] = GROD.min()
+    GROD_stat[3] = cp.quantile(GROD, 0.25)
+    GROD_stat[4] = cp.median(GROD)
+    GROD_stat[5] = cp.quantile(GROD, 0.75)
+    GROD_stat[6] = GROD.max()
+
+    #theta_iter = theta_iter.astype(DTYPEf)
+    #theta_iter = theta_iter[theta_iter >= 0.]
+
+    #return qavg, GROD, GROD_stat, theta_iter
+
 if __name__ == "__main__":
     import doctest
     doctest.testmod()

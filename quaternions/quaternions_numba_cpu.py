@@ -73,7 +73,6 @@ def q4_positive(qarr, _EPS=1e-7):
 
     return qpos
 
-
 @njit(float32[:,:](float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mult(qa, qb):
     """
@@ -429,6 +428,9 @@ def q4_mean_disori(qarr, qsym):
     >>> qarr = q4_mult(qa, q4np.q4_orispread(ncrys=1024, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qavg, GROD, GROD_stat, theta_iter = q4_mean_disori(qarr, qsym)
+    >>> deso = np.arccos(q4np.q4_cosang2(qa[0], qavg))*2*180/np.pi
+    >>> (deso < 0.1)
+    True
     >>> np.allclose(qa[0], qavg, atol=1e-3)
     True
     >>> qavg2, GROD2, GROD_stat2, theta_iter2 = q4np.q4_mean_disori(qarr, qsym)
@@ -450,13 +452,17 @@ def q4_mean_disori(qarr, qsym):
 
         # disorientation of each crystal wrt average orientation:
         qdis, _ = q4_disori_quat(qref, qarr, qsym, frame=1, method=1)
+        #qtmp = np.zeros((len(qarr),4), dtype=DTYPEf)
+        #qtmp[:,0] = qref[0,0]; qtmp[:,1] = qref[0,1]; qtmp[:,2] = qref[0,2]; qtmp[:,3] = qref[0,3]
+        #qdis, _ = q4_disori_quat(qtmp, qarr, qsym, frame=1, method=1)
 
         qtmp = np.zeros((1,4), dtype=DTYPEf)
-        for j in prange(ncrys):
-            qtmp[0,0] += qdis[j,0]
-            qtmp[0,1] += qdis[j,1]
-            qtmp[0,2] += qdis[j,2]
-            qtmp[0,3] += qdis[j,3]
+        #for j in prange(ncrys):
+        #    qtmp[0,0] += qdis[j,0]
+        #    qtmp[0,1] += qdis[j,1]
+        #    qtmp[0,2] += qdis[j,2]
+        #    qtmp[0,3] += qdis[j,3]
+        qtmp[0] = np.sum(qdis, axis=0)
         qtmp /= np.sqrt(qtmp[0,0]**2 + qtmp[0,1]**2 + qtmp[0,2]**2 + qtmp[0,3]**2)
 
         # q_mean=q_ref*q_sum/|q_sum|
@@ -488,7 +494,6 @@ def q4_mean_disori(qarr, qsym):
     theta_iter = theta_iter[theta_iter >= 0.]
 
     return qavg, GROD, GROD_stat, theta_iter
-
 
 if __name__ == "__main__":
     import doctest

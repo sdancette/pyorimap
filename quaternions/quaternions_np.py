@@ -1110,9 +1110,12 @@ def q4_mean_disori(qarr, qsym):
     Examples
     --------
     >>> qa = q4_random(1)
-    >>> qarr = q4_mult(qa, q4_orispread(ncrys=1024, thetamax=1., misori=True))
+    >>> qarr = q4_mult(qa, q4_orispread(ncrys=1024, thetamax=2., misori=True))
     >>> qsym = q4_sym_cubic()
     >>> qavg, GROD, GROD_stat, theta_iter = q4_mean_disori(qarr, qsym)
+    >>> deso = np.arccos(q4_cosang2(qa, qavg))*2*180/np.pi
+    >>> (deso < 0.1)
+    True
     >>> np.allclose(qa, qavg, atol=1e-3)
     True
     """
