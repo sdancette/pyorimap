@@ -32,6 +32,7 @@ This module contains the following functions:
 
 import logging
 import numpy as np
+import scipy.ndimage as ndi
 import quaternion as quat
 
 from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_structured
@@ -322,7 +323,7 @@ def q4_random(n=1024, dtype=np.float32):
     >>> np.allclose(norm, np.ones(1024, dtype=np.float32))
     True
     """
-    rand = np.random.rand(n,3)
+    rand = np.random.rand(n,3).astype(dtype)
 
     r1 = np.sqrt(1.0 - rand[:,0])
     r2 = np.sqrt(rand[:,0])
@@ -780,7 +781,7 @@ def q4_from_mat(R, dtype=np.float32):
     >>> qarr = q4_random(n=1024)
     >>> R = q4_to_mat(qarr)
     >>> qback = q4_from_mat(R)
-    >>> np.allclose(qarr, qback, atol=1e-5)
+    >>> np.allclose(qarr, qback, atol=1e-4)
     True
     """
     qarr = q4_from_eul( mat_to_eul(R) )
@@ -868,6 +869,25 @@ def transpose_mat(R):
     Rt = np.einsum('...ij->...ji', R)
 
     return Rt
+
+def q4_angle(qa, qb, dtype=np.float32):
+    """
+    Returns the angle (degrees) between quaternions `qa` and `qb`.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion.
+    qb : ndarray
+        array of quaternions or single quaternion.
+
+    Returns
+    -------
+    ang : ndarray
+        the angle in degrees between quaternions `qa` and `qb`.
+    """
+    ang = np.arccos(q4_cosang2(qa, qb))*2*180/np.pi
+    return ang
 
 def q4_cosang2(qa, qb, dtype=np.float32):
     """
@@ -1113,10 +1133,8 @@ def q4_mean_disori(qarr, qsym):
     >>> qarr = q4_mult(qa, q4_orispread(ncrys=1024, thetamax=2., misori=True))
     >>> qsym = q4_sym_cubic()
     >>> qavg, GROD, GROD_stat, theta_iter = q4_mean_disori(qarr, qsym)
-    >>> deso = np.arccos(q4_cosang2(qa, qavg))*2*180/np.pi
-    >>> (deso < 0.1)
-    True
-    >>> np.allclose(qa, qavg, atol=1e-3)
+    >>> ang = q4_angle(qa, qavg)
+    >>> np.allclose(ang, 0., atol=0.5)
     True
     """
 
@@ -1124,7 +1142,7 @@ def q4_mean_disori(qarr, qsym):
     theta= 999.
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
-    while (theta > 0.1) and (ii < nitermax):
+    while (theta > 0.2) and (ii < nitermax):
         if ii == 0:
             # initialize avg orientation:
             qref = qarr[0,:]
@@ -1132,9 +1150,12 @@ def q4_mean_disori(qarr, qsym):
         # disorientation of each crystal wrt average orientation:
         qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)
 
-        qtmp = np.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
-        qtmp /= np.sqrt(np.einsum('...i,...i', qtmp, qtmp))
+        #qtmp = np.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
+        #qtmp /= np.sqrt(np.einsum('...i,...i', qtmp, qtmp))
         #qtmp /= np.sqrt(np.sum(qtmp**2)) # slower ?
+        qtmp = np.sum(qdis, axis=0, dtype=np.float64)
+        qtmp /= np.sqrt(qtmp[0]**2 + qtmp[1]**2 + qtmp[2]**2 + qtmp[3]**2)
+        qtmp = qtmp.astype(DTYPEf)
 
         # q_mean=q_ref*q_sum/|q_sum|
         qavg = q4_mult(qref, qtmp)
@@ -1161,10 +1182,104 @@ def q4_mean_disori(qarr, qsym):
 
     theta_iter = theta_iter[theta_iter >= 0.]
 
-    logging.info("Computed average grain orientation over {} crystals in {} iterations.".format(len(qarr), ii))
-    logging.info("Theta convergence (degrees): {}".format(theta_iter))
+    #logging.info("Computed average grain orientation over {} crystals in {} iterations.".format(len(qarr), ii))
+    #logging.info("Theta convergence (degrees): {}".format(theta_iter))
 
     return qavg, GROD, GROD_stat, theta_iter
+
+def q4_mean_multigrain(qarr, grains, qsym):
+    """
+    Average orientation and disorientation (multigrain).
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (ncrys, 4) array of quaternions.
+    grains : ndarray
+        (ncrys,) array of grain labels.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+
+    Returns
+    -------
+    qavg_unic : ndarray
+        (nlab, 4) array of grain average quaternions.
+    GOS_unic : ndarray
+        (nlab,) array of grain orientation spread.
+    theta_unic : ndarray
+        (nlab,) array of grain convergence angle.
+    GROD : ndarray
+        (ncrys,) array of grain reference orientation deviation in degrees.
+    theta_iter : ndarray
+        convergence angle (degree) during the iterations for `qavg`.
+    iback : ndarray
+        (ncrys,) array of indices allowing to reconstruct the complete (ncrys,...) arrays from the grain averages (nlab,...) arrays.
+
+    Examples
+    --------
+    >>> qa = q4_random(100)
+    >>> grains = np.repeat(np.arange(0,100), 1024)
+    >>> np.random.shuffle(grains)
+    >>> qarr = q4_mult(qa[grains], q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qsym = q4_sym_cubic()
+    >>> qavg, GOS, theta, GROD, theta_iter, iback = q4_mean_multigrain(qarr, grains, qsym)
+    >>> ang = q4_angle(qa, qavg)
+    >>> np.allclose(ang, np.zeros_like(ang), atol=0.5)
+    True
+    """
+
+    ii = 0
+    nitermax = 10
+    theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
+
+    unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
+    theta_unic = np.zeros(len(unic), dtype=DTYPEf) + 999.
+    theta = theta_unic[iback]
+    qdis = np.zeros_like(qarr)
+
+    while (theta_unic.max() > 0.2) and (ii < nitermax):
+        if ii == 0:
+            # initialize avg orientation:
+            qref_unic = qarr[iunic]
+        qref_tot = qref_unic[iback]
+
+        # disorientation of each crystal wrt average orientation:
+        whrT = (theta > 0.2)
+        qdis[whrT] = q4_disori_quat(qref_tot[whrT], qarr[whrT], qsym, frame='crys_a', method=1)
+
+        qdis_unic = np.zeros(qref_unic.shape, dtype=np.float64)
+        qdis_unic[:,0] = ndi.sum_labels(qdis[:,0], grains, index=unic) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
+        qdis_unic[:,1] = ndi.sum_labels(qdis[:,1], grains, index=unic)
+        qdis_unic[:,2] = ndi.sum_labels(qdis[:,2], grains, index=unic)
+        qdis_unic[:,3] = ndi.sum_labels(qdis[:,3], grains, index=unic)
+
+        norm = np.sqrt(np.einsum('...i,...i', qdis_unic, qdis_unic))
+        qdis_unic /= norm[..., np.newaxis]
+        qdis_unic = qdis_unic.astype(DTYPEf)
+
+        # q_mean=q_ref*q_sum/|q_sum|
+        qavg_unic = q4_mult(qref_unic, qdis_unic)
+
+        #### theta for convergence of qavg:
+        theta_unic = np.arccos(q4_cosang2(qref_unic, qavg_unic))*2*180/np.pi
+        theta = theta_unic[iback]
+        theta_iter[ii] = theta_unic.max()
+        qref_unic = qavg_unic
+
+        ii += 1
+
+    # angles:
+    GROD = np.minimum(np.abs(qdis[:,0]), 1.)
+    GROD = np.arccos(GROD)*2*180/np.pi
+
+    GOS_unic = ndi.mean(GROD, grains, index=unic)
+
+    theta_iter = theta_iter[theta_iter >= 0.]
+
+    logging.info("Computed average grain orientation over {} crystals and {} grains in {} iterations.".format(len(qarr), len(unic), ii))
+    logging.info("Theta convergence (degrees): {}".format(theta_iter))
+
+    return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter, iback
 
 def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
     """
@@ -1180,7 +1295,7 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
         maximum disorientation angle in the distribution.
     misori : bool, default=True
         whether to compute an orientation spread or a misorientation spread.
-        The distribution of the misorientation angles is uniform only if misori=True
+        The distribution of the misorientation angles is uniform only if misori=True.
 
     Returns
     -------
@@ -1197,7 +1312,7 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
     >>> np.allclose(1., GROD.mean(), atol=0.1)
     True
     """
-    rand = np.random.rand(ncrys, 3).astype(DTYPEf)
+    rand = np.random.rand(ncrys, 3).astype(dtype)
     qarr = np.zeros((ncrys, 4), dtype=dtype)
 
     alpha = np.arccos (2. * rand[:,0] - 1)

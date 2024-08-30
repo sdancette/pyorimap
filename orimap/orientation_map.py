@@ -239,7 +239,8 @@ class OriMap(pv.ImageData):
             self._build_cell_graph(symmetric=False)
             self._get_connected_components()
             self._filter_grains()
-            self._get_grain_average()
+            #self._get_average_grain_by_grain()
+            self._get_average_grains_by_phase()
         self.save(self.params.filename[:-4]+'.vtk')
 
     def _get_cell_coords_from_points(self, method=1):
@@ -480,7 +481,63 @@ class OriMap(pv.ImageData):
 
         return unic, counts
 
-    def _get_grain_average(self):
+    def _get_average_grains_by_phase(self):
+        """
+        Compute average orientation, GOS and GROD for all grains at once in each phase.
+        """
+        grains = self.cell_data['grains']
+        phase = self.cell_data['phase']
+        GROD = np.zeros(grains.shape, dtype=DTYPEf)
+        GOS = np.zeros(grains.shape, dtype=DTYPEf)
+        qavg = np.zeros_like(self.qarray)
+
+        logging.info("Starting to compute grain average orientation and GROD (multigrain).")
+
+        thephases = sorted(list(self.params.phase_to_crys.keys()))
+        for phi in thephases:
+            if phi > 0: # indexed phases
+                whrPhi = (phase == phi)
+                qaPhi = self.qarray[whrPhi]
+                qsym = self.params.phase_to_crys[phi].qsym
+                grPhi = grains[whrPhi]
+
+                if (self.params.compute_mode == 'numba_gpu'):
+                    qa_gpu = cp.asarray(qaPhi, dtype=DTYPEf)
+                    gr_gpu = cp.asarray(grPhi, dtype=DTYPEi)
+                    qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
+                elif (self.params.compute_mode == 'numba_cpu'):
+                    qavgPhi, GOSPhi, GRODPhi, theta_iter, iback = q4nCPU.q4_mean_multigrain(qaPhi, grPhi, qsym)
+                else:
+                    qavgPhi, GOSPhi, GRODPhi, theta_iter, iback = q4np.q4_mean_multigrain(qaPhi, grPhi, qsym)
+
+                qavg[whrPhi] = qavgPhi[iback]
+                GOS[whrPhi] = GOSPhi[iback]
+                GROD[whrPhi] = GRODPhi
+
+        self.cell_data['GROD'] = GROD
+        self.cell_data['GOS'] = GOS
+
+        mydtype = [('grain', 'i4'), ('phase', 'i4'), ('npix', 'i4'), ('fvol', 'f4'),
+                   ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'), ('GOS', 'f4'), ('KAMavg', 'f4')]
+        unic, iunic, counts = np.unique(grains, return_index=True, return_counts=True)
+        grdata = np.rec.array(np.zeros(len(unic), dtype=mydtype))
+
+        qavg1 = qavg[iunic]
+        eul = q4np.q4_to_eul(qavg1)
+        grdata.grain = unic
+        grdata.phase = phase[iunic]
+        grdata.npix = counts
+        grdata.fvol = counts.astype(np.float32)/np.sum(counts)
+        grdata.phi1 = eul[:,0]
+        grdata.Phi = eul[:,1]
+        grdata.phi2 = eul[:,2]
+        grdata.GOS = GOS[iunic]
+        np.savetxt(self.params.filename[:-4]+'-grains.txt', grdata,
+                fmt="%6i %4i %9i %10.6f %10.3f %10.3f %10.3f %10.3f %10.3f", header=str(grdata.dtype.names))
+
+        logging.info("Finished to compute grain average orientation and GROD (multigrain).")
+
+    def _get_average_grain_by_grain(self):
         """
         Compute average orientation, GOS and GROD, grain by grain.
         """
@@ -489,7 +546,7 @@ class OriMap(pv.ImageData):
         GROD = np.zeros(grains.shape, dtype=DTYPEf)
         GOS = np.zeros(grains.shape, dtype=DTYPEf)
 
-        logging.info("Starting to compute grain average orientation and GROD.")
+        logging.info("Starting to compute grain average orientation and GROD (grain by grain).")
 
         unic, counts = np.unique(grains, return_counts=True)
         labcount = np.column_stack((unic, counts, np.cumsum(counts)))
@@ -537,7 +594,7 @@ class OriMap(pv.ImageData):
         self.cell_data['GROD'] = GROD
         self.cell_data['GOS'] = GOS
 
-        logging.info("Finished to compute grain average orientation and GROD.")
+        logging.info("Finished to compute grain average orientation and GROD (grain by grain).")
 
 
     def _save_phase_info(self):
