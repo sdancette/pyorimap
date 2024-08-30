@@ -489,6 +489,7 @@ class OriMap(pv.ImageData):
         phase = self.cell_data['phase']
         GROD = np.zeros(grains.shape, dtype=DTYPEf)
         GOS = np.zeros(grains.shape, dtype=DTYPEf)
+        theta = np.zeros(grains.shape, dtype=DTYPEf)
         qavg = np.zeros_like(self.qarray)
 
         logging.info("Starting to compute grain average orientation and GROD (multigrain).")
@@ -502,23 +503,44 @@ class OriMap(pv.ImageData):
                 grPhi = grains[whrPhi]
 
                 if (self.params.compute_mode == 'numba_gpu'):
-                    qa_gpu = cp.asarray(qaPhi, dtype=DTYPEf)
                     gr_gpu = cp.asarray(grPhi, dtype=DTYPEi)
+
+                    u, iu, ib = cp.unique(gr_gpu, return_index=True, return_inverse=True)
+                    # articial transfer to CPU memory to get rid of (huge amount of) cached GPU memory during cp.unique()...:
+                    unic = u.astype(DTYPEi).get(); iunic = iu.astype(DTYPEi).get(); iback = ib.astype(DTYPEi).get()
+                    u = None; iu = None; ib = None
+                    mempool.free_all_blocks()
+
+                    qa_gpu = cp.asarray(qaPhi, dtype=DTYPEf)
                     qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
+                    qavg_gpu, GOS_gpu, theta_gpu, GROD_gpu, theta_iter_gpu = q4nGPU.q4_mean_multigrain(qa_gpu,
+                                                                                                       qsym_gpu,
+                                                                                                       cp.asarray(unic),
+                                                                                                       cp.asarray(iunic),
+                                                                                                       cp.asarray(iback))
+                    qavgPhi = qavg_gpu.get()
+                    GOSPhi = GOS_gpu.get()
+                    thetaPhi = theta_gpu.get()
+                    GRODPhi = GROD_gpu.get()
+                    theta_iter = theta_iter_gpu.get()
                 elif (self.params.compute_mode == 'numba_cpu'):
-                    qavgPhi, GOSPhi, GRODPhi, theta_iter, iback = q4nCPU.q4_mean_multigrain(qaPhi, grPhi, qsym)
+                    unic, iunic, iback = np.unique(grPhi, return_index=True, return_inverse=True)
+                    qavgPhi, GOSPhi, thetaPhi, GRODPhi, theta_iter = q4nCPU.q4_mean_multigrain(qaPhi, qsym, unic, iunic, iback)
                 else:
-                    qavgPhi, GOSPhi, GRODPhi, theta_iter, iback = q4np.q4_mean_multigrain(qaPhi, grPhi, qsym)
+                    unic, iunic, iback = np.unique(grPhi, return_index=True, return_inverse=True)
+                    qavgPhi, GOSPhi, thetaPhi, GRODPhi, theta_iter = q4np.q4_mean_multigrain(qaPhi, qsym, unic, iunic, iback)
 
                 qavg[whrPhi] = qavgPhi[iback]
                 GOS[whrPhi] = GOSPhi[iback]
+                theta[whrPhi] = thetaPhi[iback]
                 GROD[whrPhi] = GRODPhi
 
         self.cell_data['GROD'] = GROD
         self.cell_data['GOS'] = GOS
+        self.cell_data['theta'] = theta
 
         mydtype = [('grain', 'i4'), ('phase', 'i4'), ('npix', 'i4'), ('fvol', 'f4'),
-                   ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'), ('GOS', 'f4'), ('KAMavg', 'f4')]
+                   ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'), ('GOS', 'f4'), ('KAMavg', 'f4'), ('theta', 'f4')]
         unic, iunic, counts = np.unique(grains, return_index=True, return_counts=True)
         grdata = np.rec.array(np.zeros(len(unic), dtype=mydtype))
 
@@ -532,8 +554,9 @@ class OriMap(pv.ImageData):
         grdata.Phi = eul[:,1]
         grdata.phi2 = eul[:,2]
         grdata.GOS = GOS[iunic]
+        grdata.theta = theta[iunic]
         np.savetxt(self.params.filename[:-4]+'-grains.txt', grdata,
-                fmt="%6i %4i %9i %10.6f %10.3f %10.3f %10.3f %10.3f %10.3f", header=str(grdata.dtype.names))
+                fmt="%6i %4i %9i %10.6f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f", header=str(grdata.dtype.names))
 
         logging.info("Finished to compute grain average orientation and GROD (multigrain).")
 
