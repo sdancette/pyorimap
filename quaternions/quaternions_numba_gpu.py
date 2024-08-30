@@ -26,6 +26,9 @@ DTYPEf = np.float32
 DTYPEi = np.int32
 _EPS = 1e-9
 
+mempool = cp.get_default_memory_pool()
+pinned_mempool = cp.get_default_pinned_memory_pool()
+
 @cuda.jit((float32[:], float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_mult(qa, qb, qc):
     qc[0] = qa[0]*qb[0] - qa[1]*qb[1] - qa[2]*qb[2] - qa[3]*qb[3]
@@ -338,7 +341,7 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
     GROD_stat[5] = cp.quantile(GROD, 0.75)
     GROD_stat[6] = GROD.max()
 
-def q4_mean_multigrain(qarr, grains, qsym):
+def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     """
     Average orientation and disorientation (multigrain).
 
@@ -348,10 +351,14 @@ def q4_mean_multigrain(qarr, grains, qsym):
     ----------
     qarr : ndarray
         (ncrys, 4) array of quaternions.
-    grains : ndarray
-        (ncrys,) array of grain labels.
     qsym : ndarray
         quaternion array of symmetry operations.
+    unigrain : ndarray
+        (nlab,) array of unic grain labels.
+    iunic : ndarray
+        (nlab,) array of indices pointing to the first occurence of each grain label in the complete (ncrys,) array.
+    iback : ndarray
+        (ncrys,) array of indices allowing to reconstruct the complete (ncrys,...) arrays from the grain averages (nlab,...) arrays.
 
     Returns
     -------
@@ -360,25 +367,26 @@ def q4_mean_multigrain(qarr, grains, qsym):
     GOS_unic : ndarray
         (nlab,) array of grain orientation spread.
     theta_unic : ndarray
-        (nlab,) array of grain convergence angle.
+        (nlab,) array of final grain convergence angle.
     GROD : ndarray
         (ncrys,) array of grain reference orientation deviation in degrees.
     theta_iter : ndarray
         convergence angle (degree) during the iterations for `qavg`.
-    iback : ndarray
-        (ncrys,) array of indices allowing to reconstruct the complete (ncrys,...) arrays from the grain averages (nlab,...) arrays.
 
     Examples
     --------
     >>> qa = q4np.q4_random(100)
     >>> grains = np.repeat(np.arange(0,100), 1024)
     >>> np.random.shuffle(grains)
+    >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
     >>> qarr = q4np.q4_mult(qa[grains], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qarr_gpu = cp.asarray(qarr)
-    >>> grains_gpu = cp.asarray(grains)
     >>> qsym_gpu = cp.asarray(qsym)
-    >>> qavg_gpu, GOS_gpu, theta_gpu, GROD_gpu, theta_iter_gpu, iback_gpu = q4_mean_multigrain(qarr_gpu, grains_gpu, qsym_gpu)
+    >>> unic_gpu =  cp.asarray(unic.astype(DTYPEi))
+    >>> iunic_gpu = cp.asarray(iunic.astype(DTYPEi))
+    >>> iback_gpu = cp.asarray(iback.astype(DTYPEi))
+    >>> qavg_gpu, GOS_gpu, theta_gpu, GROD_gpu, theta_iter_gpu = q4_mean_multigrain(qarr_gpu, qsym_gpu, unic_gpu, iunic_gpu, iback_gpu)
     >>> ang = q4np.q4_angle(qa, cp.asnumpy(qavg_gpu))
     >>> np.allclose(ang, np.zeros_like(ang), atol=0.5)
     True
@@ -388,72 +396,62 @@ def q4_mean_multigrain(qarr, grains, qsym):
     nitermax = 10
     theta_iter = cp.zeros(nitermax, dtype=DTYPEf) - 1.
 
-    unic, iunic, iback, counts = cp.unique(grains, return_index=True, return_inverse=True, return_counts=True)
-    theta_unic = cp.zeros(len(unic), dtype=DTYPEf) + 999.
-    theta = theta_unic[iback]
-    qdis = cp.zeros_like(qarr)
-    qref_tot = cp.zeros_like(qarr)
-    qavg_unic = cp.zeros((len(unic), 4), dtype=cp.float32)
+    theta_unic = cp.zeros(len(unigrain), dtype=DTYPEf) + 999.
+    qavg_unic = cp.zeros((len(unigrain), 4), dtype=cp.float32)
+    qdis_unic = cp.zeros((len(unigrain), 4), dtype=cp.float64)
 
+    grains = unigrain[iback]
+    GROD = cp.zeros(grains.size, dtype=cp.float32)
     while (theta_unic.max() > 0.2) and (ii < nitermax):
         if ii == 0:
             # initialize avg orientation:
             qref_unic = qarr[iunic]
-        qref_tot[:,:] = qref_unic[iback]
+        qdis = qref_unic[iback] # temporarily stores reference orientation before update
 
         # disorientation of each crystal wrt average orientation:
-        #whrT = (theta > 0.2)
-        #qtmp = qdis[whrT]
-        #q4_disori_quat(qref_tot[whrT], qarr[whrT], qsym,
-        #               qtmp, frame=1, nthreads=256)
-        #qdis[whrT] = qtmp
-        q4_disori_quat(qref_tot, qarr, qsym,
+        q4_disori_quat(qdis, qarr, qsym,
                        qdis, frame=1, nthreads=256)
 
-        #print(qdis)
-        qdis_unic = cp.zeros(qref_unic.shape, dtype=np.float64)
-        qdis_unic[:,0] = ndix.sum_labels(qdis[:,0], grains, index=unic) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
-        qdis_unic[:,1] = ndix.sum_labels(qdis[:,1], grains, index=unic)
-        qdis_unic[:,2] = ndix.sum_labels(qdis[:,2], grains, index=unic)
-        qdis_unic[:,3] = ndix.sum_labels(qdis[:,3], grains, index=unic)
+        cp.minimum(cp.abs(qdis[:,0]), 1., out=GROD)
 
-        norm = np.sqrt(np.einsum('...i,...i', qdis_unic, qdis_unic))
+        qdis_unic *= 0.
+        qdis_unic[:,0] = ndix.sum_labels(qdis[:,0], grains, index=unigrain) # sum_labels takes care of float64 precision for big arrays with more than 16*1024**2 quaternions
+        qdis_unic[:,1] = ndix.sum_labels(qdis[:,1], grains, index=unigrain)
+        qdis_unic[:,2] = ndix.sum_labels(qdis[:,2], grains, index=unigrain)
+        qdis_unic[:,3] = ndix.sum_labels(qdis[:,3], grains, index=unigrain)
+
+        norm = cp.sqrt(cp.einsum('...i,...i', qdis_unic, qdis_unic))
         qdis_unic /= norm[..., cp.newaxis]
-        qdis_unic = qdis_unic.astype(cp.float32)
 
         # q_mean=q_ref*q_sum/|q_sum|
-        q4_mult(qref_unic, qdis_unic, qavg_unic)
-        #print(qavg_unic)
+        q4_mult(qref_unic, qdis_unic.astype(cp.float32), qavg_unic)
 
         #### theta for convergence of qavg:
         theta_unic[:] = cp.arccos( cp.minimum(cp.abs(qref_unic[:,0]*qavg_unic[:,0] +
-                                              qref_unic[:,1]*qavg_unic[:,1] +
-                                              qref_unic[:,2]*qavg_unic[:,2] +
-                                              qref_unic[:,3]*qavg_unic[:,3]), 1.), dtype=DTYPEf)*2*180/cp.pi
-        theta[:] = theta_unic[iback]
+                                                     qref_unic[:,1]*qavg_unic[:,1] +
+                                                     qref_unic[:,2]*qavg_unic[:,2] +
+                                                     qref_unic[:,3]*qavg_unic[:,3]), 1.), dtype=DTYPEf)*2*180/cp.pi
         theta_iter[ii] = theta_unic.max()
-        qref_unic = qavg_unic
-        #qref_tot = cp.zeros((1,4), dtype=DTYPEf)
+        qref_unic[:,:] = qavg_unic
+
+        # free memory for next loop:
+        qdis = qdis[0:1]*0.
+        mempool.free_all_blocks()
 
         ii += 1
 
     # angles:
-    GROD = cp.minimum(cp.abs(qdis[:,0]), 1.)
-    GROD = cp.arccos(GROD)*2*180/cp.pi
+    cp.arccos(GROD, out=GROD)
+    GROD *= 2*180/cp.pi
 
-    GOS_unic = ndix.mean(GROD, grains, index=unic)
+    GOS_unic = ndix.mean(GROD, grains, index=unigrain)
 
     theta_iter = theta_iter[theta_iter >= 0.]
 
-    logging.info("Computed average grain orientation over {} crystals and {} grains in {} iterations.".format(len(qarr), len(unic), ii))
+    logging.info("Computed average grain orientation over {} crystals and {} grains in {} iterations.".format(len(qarr), len(unigrain), ii))
     logging.info("Theta convergence (degrees): {}".format(theta_iter))
 
-    theta = cp.zeros(1, dtype=DTYPEf)
-    qdis = cp.zeros((1,4), dtype=DTYPEf)
-    #qtmp = cp.zeros((1,4), dtype=DTYPEf)
-
-    return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter, iback
-
+    return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter
 
 if __name__ == "__main__":
     import doctest

@@ -1187,7 +1187,7 @@ def q4_mean_disori(qarr, qsym):
 
     return qavg, GROD, GROD_stat, theta_iter
 
-def q4_mean_multigrain(qarr, grains, qsym):
+def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     """
     Average orientation and disorientation (multigrain).
 
@@ -1195,10 +1195,14 @@ def q4_mean_multigrain(qarr, grains, qsym):
     ----------
     qarr : ndarray
         (ncrys, 4) array of quaternions.
-    grains : ndarray
-        (ncrys,) array of grain labels.
     qsym : ndarray
         quaternion array of symmetry operations.
+    unigrain : ndarray
+        (nlab,) array of unic grain labels.
+    iunic : ndarray
+        (nlab,) array of indices pointing to the first occurence of each grain label in the complete (ncrys,) array.
+    iback : ndarray
+        (ncrys,) array of indices allowing to reconstruct the complete (ncrys,...) arrays from the grain averages (nlab,...) arrays.
 
     Returns
     -------
@@ -1207,22 +1211,21 @@ def q4_mean_multigrain(qarr, grains, qsym):
     GOS_unic : ndarray
         (nlab,) array of grain orientation spread.
     theta_unic : ndarray
-        (nlab,) array of grain convergence angle.
+        (nlab,) array of final grain convergence angle.
     GROD : ndarray
         (ncrys,) array of grain reference orientation deviation in degrees.
     theta_iter : ndarray
         convergence angle (degree) during the iterations for `qavg`.
-    iback : ndarray
-        (ncrys,) array of indices allowing to reconstruct the complete (ncrys,...) arrays from the grain averages (nlab,...) arrays.
 
     Examples
     --------
     >>> qa = q4_random(100)
     >>> grains = np.repeat(np.arange(0,100), 1024)
     >>> np.random.shuffle(grains)
+    >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
     >>> qarr = q4_mult(qa[grains], q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
     >>> qsym = q4_sym_cubic()
-    >>> qavg, GOS, theta, GROD, theta_iter, iback = q4_mean_multigrain(qarr, grains, qsym)
+    >>> qavg, GOS, theta, GROD, theta_iter = q4_mean_multigrain(qarr, qsym, unic, iunic, iback)
     >>> ang = q4_angle(qa, qavg)
     >>> np.allclose(ang, np.zeros_like(ang), atol=0.5)
     True
@@ -1232,11 +1235,12 @@ def q4_mean_multigrain(qarr, grains, qsym):
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
 
-    unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
-    theta_unic = np.zeros(len(unic), dtype=DTYPEf) + 999.
+    #unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
+    theta_unic = np.zeros(len(unigrain), dtype=DTYPEf) + 999.
     theta = theta_unic[iback]
     qdis = np.zeros_like(qarr)
 
+    grains = unigrain[iback]
     while (theta_unic.max() > 0.2) and (ii < nitermax):
         if ii == 0:
             # initialize avg orientation:
@@ -1245,17 +1249,17 @@ def q4_mean_multigrain(qarr, grains, qsym):
 
         # disorientation of each crystal wrt average orientation:
         whrT = (theta > 0.2)
-        qdis[whrT] = q4_disori_quat(qref_tot[whrT], qarr[whrT], qsym, frame='crys_a', method=1)
+        qdis[whrT] = q4_disori_quat(qref_tot[whrT], qarr[whrT], qsym, frame='crys_a', method=1, return_index=False)
 
         qdis_unic = np.zeros(qref_unic.shape, dtype=np.float64)
-        qdis_unic[:,0] = ndi.sum_labels(qdis[:,0], grains, index=unic) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
-        qdis_unic[:,1] = ndi.sum_labels(qdis[:,1], grains, index=unic)
-        qdis_unic[:,2] = ndi.sum_labels(qdis[:,2], grains, index=unic)
-        qdis_unic[:,3] = ndi.sum_labels(qdis[:,3], grains, index=unic)
+        qdis_unic[:,0] = ndi.sum_labels(qdis[:,0], grains, index=unigrain) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
+        qdis_unic[:,1] = ndi.sum_labels(qdis[:,1], grains, index=unigrain)
+        qdis_unic[:,2] = ndi.sum_labels(qdis[:,2], grains, index=unigrain)
+        qdis_unic[:,3] = ndi.sum_labels(qdis[:,3], grains, index=unigrain)
 
         norm = np.sqrt(np.einsum('...i,...i', qdis_unic, qdis_unic))
         qdis_unic /= norm[..., np.newaxis]
-        qdis_unic = qdis_unic.astype(DTYPEf)
+        qdis_unic = qdis_unic.astype(np.float32)
 
         # q_mean=q_ref*q_sum/|q_sum|
         qavg_unic = q4_mult(qref_unic, qdis_unic)
@@ -1272,14 +1276,14 @@ def q4_mean_multigrain(qarr, grains, qsym):
     GROD = np.minimum(np.abs(qdis[:,0]), 1.)
     GROD = np.arccos(GROD)*2*180/np.pi
 
-    GOS_unic = ndi.mean(GROD, grains, index=unic)
+    GOS_unic = ndi.mean(GROD, grains, index=unigrain)
 
     theta_iter = theta_iter[theta_iter >= 0.]
 
-    logging.info("Computed average grain orientation over {} crystals and {} grains in {} iterations.".format(len(qarr), len(unic), ii))
+    logging.info("Computed average grain orientation over {} crystals and {} grains in {} iterations.".format(len(qarr), len(unigrain), ii))
     logging.info("Theta convergence (degrees): {}".format(theta_iter))
 
-    return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter, iback
+    return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter
 
 def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
     """
