@@ -294,6 +294,7 @@ class OriMap(pv.ImageData):
         """
 
         dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
+        dz *= self.spacing[2]; dy *= self.spacing[1];  dx *= self.spacing[0]
         z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
 
         dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
@@ -451,6 +452,8 @@ class OriMap(pv.ImageData):
         """
         Relabel grains in a consecutive sequence after the exclusion of regions outside of ncell_range and phase_range.
         """
+
+        # why not using ndimage.label directly for this relabeling operation?
         nmin = self.params.grain_size_bounds[0]; nmax = self.params.grain_size_bounds[1]
         phimin = self.params.grain_phase_bounds[0]; phimax = self.params.grain_phase_bounds[1]
         phase = self.cell_data['phase']
@@ -497,7 +500,12 @@ class OriMap(pv.ImageData):
         thephases = sorted(list(self.params.phase_to_crys.keys()))
         for phi in thephases:
             if phi > 0: # indexed phases
-                whrPhi = (phase == phi)
+                logging.info("... phase {}:".format(phi))
+                whrPhi = (phase == phi)*(grains > 0)
+                if np.sum(whrPhi) == 0:
+                    logging.info("No pixel is this phase anymore using present grain filtering parameters. Skipping it for grain averages.")
+                    continue
+
                 qaPhi = self.qarray[whrPhi]
                 qsym = self.params.phase_to_crys[phi].qsym
                 grPhi = grains[whrPhi]
