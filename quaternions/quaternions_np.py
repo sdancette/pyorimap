@@ -1104,7 +1104,52 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
     else:
         return qdis
 
-def q4_mean_disori(qarr, qsym):
+def q4_to_FZ(qarr, qsym, return_index=False, dtype=np.float32):
+    """
+    Move quaternions to Fundamental Zone based on crystal symmetries.
+
+    The Fundamental Zone corresponds to the i_th equivalent orientation with the lowest angle wrt the reference frame.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        array of quaternions or single quaternion.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+    return_index : bool, default=False
+        whether to return also the index of the i_th equivalent quaternion corresponding to Fundamental Zone.
+
+    Returns
+    -------
+    qFZ : ndarray
+        equivalent quaternion array in the Fundamental Zone.
+    ii : ndarray
+        if `return_index`=True, the index of the i_th equivalent quaternion corresponding to Fundamental Zone.
+
+    Examples
+    --------
+    >>> qa = np.array([1,0,0,0], dtype=np.float32)
+    """
+    a0 = 0.
+    qFZ = np.zeros_like(qarr)
+    if return_index:
+        ii = np.zeros(np.atleast_2d(qarr).shape[0], dtype=np.uint8)
+
+    for isym, q in enumerate(qsym):
+        qequ = q4_mult(qarr, q)
+        a0 = np.minimum(np.abs( qFZ[...,0]), 1.)
+        a1 = np.minimum(np.abs(qequ[...,0]), 1.)
+        whr = (a1 > a0)
+        qFZ[whr] = qequ[whr]
+        if return_index:
+            ii[whr] = isym
+
+    if return_index:
+        return q4_positive(qFZ), ii
+    else:
+        return q4_positive(qFZ)
+
+def q4_mean_disori(qarr, qsym, qref=None):
     """
     Average orientation and disorientation (GOS and GROD).
 
@@ -1114,6 +1159,8 @@ def q4_mean_disori(qarr, qsym):
         (n, 4) array of quaternions.
     qsym : ndarray
         quaternion array of symmetry operations.
+    qref : ndarray or None
+        single reference quaternion to initialize the average orientation.
 
     Returns
     -------
@@ -1144,8 +1191,10 @@ def q4_mean_disori(qarr, qsym):
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
     while (theta > 0.2) and (ii < nitermax):
         if ii == 0:
-            # initialize avg orientation:
-            qref = qarr[0,:]
+            if not isinstance(qref, np.ndarray):
+                # initialize avg orientation:
+                qref = qarr[0,:]
+                #qref = np.mean(qarr, axis=0)
 
         # disorientation of each crystal wrt average orientation:
         qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)

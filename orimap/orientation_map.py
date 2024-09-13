@@ -233,6 +233,7 @@ class OriMap(pv.ImageData):
         Cell neighborhood is defined by a structuring element
         with the input `radius` and `connectivity` as defined in self.params.selem.
         """
+        self._move_to_FZ_by_phase()
         self._get_neighborhood()
 
         if self.params.grain_cluster_method == 'graph':
@@ -305,6 +306,34 @@ class OriMap(pv.ImageData):
         else:
             ii = xyz_to_index(x+dx, y+dy, z+dz, dimensions, spacing, bounds, mode='cells')
         return ii
+
+    def _move_to_FZ_by_phase(self):
+        """
+        Move quaternions to Fundamental Zone, phase by phase.
+        """
+        logging.info("... Moving quaternions to Fundamental Zone.")
+        phase = self.cell_data['phase']
+        try:
+            ncrys = len(self.qarray)
+        except AttributeError:
+            self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+
+        # loop by phase ID for disorientation calculation:
+        thephases = sorted(list(self.params.phase_to_crys.keys()))
+        for phi in thephases:
+            if phi == 0: # unindexed
+                continue
+            whrPhi = (phase == phi)
+            qarr = self.qarray[whrPhi]
+
+            try:
+                qsym = self.params.phase_to_crys[phi].qsym
+            except AttributeError:
+                self.params.phase_to_crys[phi].infer_symmetry()
+                self.params.phase_to_crys[phi].get_qsym()
+                qsym = self.params.phase_to_crys[phi].qsym
+
+            self.qarray[whrPhi] = q4np.q4_to_FZ(qarr, qsym)
 
     def _get_disori_by_phase(self):
         """
