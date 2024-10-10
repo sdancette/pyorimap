@@ -1128,7 +1128,11 @@ def q4_to_FZ(qarr, qsym, return_index=False, dtype=np.float32):
 
     Examples
     --------
-    >>> qa = np.array([1,0,0,0], dtype=np.float32)
+    >>> qa = q4_sym_cubic()
+    >>> qFZ = q4_to_FZ(qa, qa)
+    >>> ref = np.tile(np.array([1,0,0,0], dtype=DTYPEf), 24).reshape(24, -1)
+    >>> np.allclose(qFZ, ref, atol=1e-6)
+    True
     """
     a0 = 0.
     qFZ = np.zeros_like(qarr)
@@ -1149,7 +1153,7 @@ def q4_to_FZ(qarr, qsym, return_index=False, dtype=np.float32):
     else:
         return q4_positive(qFZ)
 
-def q4_mean_disori(qarr, qsym, qref=None):
+def q4_mean_disori(qarr, qsym):
     """
     Average orientation and disorientation (GOS and GROD).
 
@@ -1159,8 +1163,6 @@ def q4_mean_disori(qarr, qsym, qref=None):
         (n, 4) array of quaternions.
     qsym : ndarray
         quaternion array of symmetry operations.
-    qref : ndarray or None
-        single reference quaternion to initialize the average orientation.
 
     Returns
     -------
@@ -1189,13 +1191,17 @@ def q4_mean_disori(qarr, qsym, qref=None):
     theta= 999.
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
-    while (theta > 0.2) and (ii < nitermax):
-        if ii == 0:
-            if not isinstance(qref, np.ndarray):
-                # initialize avg orientation:
-                qref = qarr[0,:]
-                #qref = np.mean(qarr, axis=0)
 
+    # initialize avg orientation:
+    #qref = qarr[0,:]
+    qmed = np.atleast_2d(np.median(qarr, axis=0))
+    cosang = np.minimum(np.abs( qmed[0,0]*qarr[:,0] +
+                                qmed[0,1]*qarr[:,1] +
+                                qmed[0,2]*qarr[:,2] +
+                                qmed[0,3]*qarr[:,3]), 1.)
+    imed = np.argmax(cosang)
+    qref = qarr[imed,:]
+    while (theta > 0.2) and (ii < nitermax):
         # disorientation of each crystal wrt average orientation:
         qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)
 
@@ -1269,10 +1275,10 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     Examples
     --------
     >>> qa = q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024)
+    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4_mult(qa[grains], q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4_mult(qa[grains - 1], q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
     >>> qsym = q4_sym_cubic()
     >>> qavg, GOS, theta, GROD, theta_iter = q4_mean_multigrain(qarr, qsym, unic, iunic, iback)
     >>> ang = q4_angle(qa, qavg)
@@ -1284,16 +1290,28 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
 
+    grains = unigrain[iback]
+
     #unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
     theta_unic = np.zeros(len(unigrain), dtype=DTYPEf) + 999.
     theta = theta_unic[iback]
     qdis = np.zeros_like(qarr)
 
-    grains = unigrain[iback]
+    # update iunic to account for the median quaternion in each grain, instead of the first, to initialize the average loop:
+    qmed = np.zeros((len(unigrain), 4), dtype=DTYPEf)
+    qmed[:,0] = ndi.median(qarr[:,0], grains, index=unigrain)
+    qmed[:,1] = ndi.median(qarr[:,1], grains, index=unigrain)
+    qmed[:,2] = ndi.median(qarr[:,2], grains, index=unigrain)
+    qmed[:,3] = ndi.median(qarr[:,3], grains, index=unigrain)
+    qmed = qmed[iback] # back to full size ncrys
+    cosang = q4_cosang2(qmed, qarr)
+
+    imed = ndi.maximum_position(cosang, grains, index=unigrain)
+    imed = np.squeeze(np.array(imed, dtype=DTYPEi))
+    qref_unic = qarr[np.atleast_1d(imed)]
+    #qref_unic = qarr[iunic]
+
     while (theta_unic.max() > 0.2) and (ii < nitermax):
-        if ii == 0:
-            # initialize avg orientation:
-            qref_unic = qarr[iunic]
         qref_tot = qref_unic[iback]
 
         # disorientation of each crystal wrt average orientation:

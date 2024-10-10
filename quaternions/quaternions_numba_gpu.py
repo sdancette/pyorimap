@@ -24,10 +24,31 @@ from numba.types import Tuple
 
 DTYPEf = np.float32
 DTYPEi = np.int32
-_EPS = 1e-9
+_EPS = 1e-7
 
 mempool = cp.get_default_memory_pool()
 pinned_mempool = cp.get_default_pinned_memory_pool()
+
+@cuda.jit((float32[:], float32), fastmath=True, device=True)
+def _device_q4_positive(qa, _EPS):
+    opposite = False
+    if (qa[0] < -_EPS):
+        opposite = True
+    elif (qa[0] >= -_EPS)*(qa[0] < _EPS):
+        if (qa[1] < -_EPS):
+            opposite = True
+        elif (qa[1] >= -_EPS)*(qa[1] < _EPS):
+            if (qa[2] < -_EPS):
+                opposite = True
+            elif (qa[2] >= -_EPS)*(qa[2] < _EPS):
+                if (qa[3] < -_EPS):
+                    opposite = True
+
+    if opposite:
+        qa[0] = -qa[0]
+        qa[1] = -qa[1]
+        qa[2] = -qa[2]
+        qa[3] = -qa[3]
 
 @cuda.jit((float32[:], float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_mult(qa, qb, qc):
@@ -58,6 +79,12 @@ def _kernel_q4_inv(qa, qb):
     i = cuda.grid(1)
     if i < qa.shape[0]:
         _device_q4_inv(qa[i,:], qb[i,:])
+
+@cuda.jit((float32[:,:], float32[:,:], float32[:]))
+def _kernel_q4_cosang2(qa, qb, cosang):
+    i = cuda.grid(1)
+    if i < qa.shape[0]:
+        cosang[i] = _device_q4_cosang2(qa[i,:], qb[i,:])
 
 @cuda.jit((float32[:,:], float32[:,:], float32[:,:], float32[:]), fastmath=True)
 def _kernel_q4_disori_angle(qa, qb, qsym, ang):
@@ -107,6 +134,26 @@ def _kernel_q4_disori_quat(qa, qb, qsym, qdis, frame):
             _device_q4_mult(qb[i,:], qa_inv, qdis[i,:])
         else:
             _device_q4_mult(qa_inv, qb[i,:], qdis[i,:])
+        _device_q4_positive(qdis[i,:], _EPS)
+
+@cuda.jit((float32[:,:], float32[:,:], float32[:,:]), fastmath=True)
+def _kernel_q4_to_FZ(qa, qsym, qFZ):
+    i = cuda.grid(1)
+    if i < qa.shape[0]:
+        # initialize arrays:
+        b0 = 0.
+        qc = cuda.local.array(shape=4, dtype=float32)
+
+        for j in range(len(qsym)):
+            _device_q4_mult(qa[i,:], qsym[j,:], qc)
+            b1 = min(abs(qc[0]), 1.)
+            if b1 > b0:
+                b0 = b1
+                _device_q4_positive(qc, _EPS)
+                qFZ[i,0] = qc[0]
+                qFZ[i,1] = qc[1]
+                qFZ[i,2] = qc[2]
+                qFZ[i,3] = qc[3]
 
 def q4_mult(qa, qb, qc, nthreads=256):
     """
@@ -167,6 +214,39 @@ def q4_inv(qa, qb, nthreads=256):
     threadsperblock = nthreads
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_q4_inv[blockspergrid, threadsperblock](qa, qb)
+
+def q4_cosang2(qa, qb, cosang, nthreads=256):
+    """
+    Wrapper calling the kernel to compute the cosine of the half angle between `qa` and `qb`.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion on GPU memory.
+    qb : ndarray
+        array of quaternions or single quaternion on GPU memory.
+    cosang : ndarray
+        the cosine of the half angle between quaternions `qa` and `qb`. on GPU memory.
+
+    Examples
+    --------
+    >>> qa = q4np.q4_random(1024)
+    >>> ang = np.random.rand(1024)*180.
+    >>> qrot = q4np.q4_from_axis_angle(np.random.rand(1024,3), ang)
+    >>> qb = q4np.q4_mult(qa, qrot)
+    >>> qa_gpu = cp.asarray(qa, dtype=DTYPEf)
+    >>> qb_gpu = cp.asarray(qb, dtype=DTYPEf)
+    >>> cosang_gpu = cp.zeros_like(qa_gpu[:,0])
+    >>> q4_cosang2(qa_gpu, qb_gpu, cosang_gpu, nthreads=128)
+    >>> aback = np.degrees(2*np.arccos(cp.asnumpy(cosang_gpu)))
+    >>> np.allclose(aback, ang, atol=0.1)
+    True
+    """
+    threadsperblock = nthreads
+    blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_q4_cosang2[blockspergrid, threadsperblock](qa, qb, cosang)
 
 def q4_disori_angle(qa, qb, qsym, ang, nthreads=256):
     """
@@ -248,6 +328,42 @@ def q4_disori_quat(qa, qb, qsym, qdis, frame=0, nthreads=256):
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_q4_disori_quat[blockspergrid, threadsperblock](qa, qb, qsym, qdis, frame)
 
+def q4_to_FZ(qa, qsym, qFZ, nthreads=256):
+    """
+    Wrapper calling the kernel to move quaternions to Fundamental Zone.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion on GPU memory.
+    qsym : ndarray
+        quaternion array of symmetry operations on GPU memory.
+    qFZ : ndarray
+        array of quaternions in the Fundamental Zone, modified in place on GPU memory.
+
+    Examples
+    --------
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> qsym_gpu = cp.asarray(qsym, dtype=DTYPEf)
+    >>> qFZ_gpu = cp.zeros_like(qsym_gpu)
+    >>> q4_to_FZ(qsym_gpu, qsym_gpu, qFZ_gpu)
+    >>> ref_gpu = cp.tile(cp.array([1,0,0,0], dtype=DTYPEf), 24).reshape(24, -1)
+    >>> cp.allclose(qFZ_gpu, ref_gpu, atol=1e-6)
+    array(True)
+    >>> qa = q4np.q4_random(1024)
+    >>> qa_gpu = cp.asarray(qa, dtype=DTYPEf)
+    >>> qFZ_gpu = cp.zeros_like(qa_gpu)
+    >>> q4_to_FZ(qa_gpu, qsym_gpu, qFZ_gpu)
+    >>> qFZ2 = q4np.q4_to_FZ(qa, qsym, return_index=False)
+    >>> np.allclose(qFZ2, cp.asnumpy(qFZ_gpu), atol=1e-6)
+    True
+    """
+    threadsperblock = nthreads
+    blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_q4_to_FZ[blockspergrid, threadsperblock](qa, qsym, qFZ)
+
 def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
     """
     Average orientation and disorientation (GOS and GROD).
@@ -299,11 +415,19 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
 
     qdis = cp.zeros_like(qarr)
     #qavg = cp.zeros((1,4), dtype=DTYPEf)
-    while (theta > 0.2) and (ii < nitermax):
-        if ii == 0:
-            # initialize avg orientation:
-            qref = qarr[0:1,:]
 
+    # initialize avg orientation:
+    #qref = qarr[0:1,:]
+    qmed = cp.atleast_2d(cp.median(qarr, axis=0))
+    q4_cosang2(qmed, qarr, GROD)
+    #cp.minimum(cp.abs(qmed[0,0]*qarr[:,0] +
+    #                  qmed[0,1]*qarr[:,1] +
+    #                  qmed[0,2]*qarr[:,2] +
+    #                  qmed[0,3]*qarr[:,3]), 1., out=GROD)
+    imed = cp.argmax(GROD)
+    qref = qarr[imed:imed+1,:]
+
+    while (theta > 0.2) and (ii < nitermax):
         # disorientation of each crystal wrt average orientation:
         qdis *= 0.
         #print(qref)
@@ -376,10 +500,10 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     Examples
     --------
     >>> qa = q4np.q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024)
+    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4np.q4_mult(qa[grains], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4np.q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qarr_gpu = cp.asarray(qarr)
     >>> qsym_gpu = cp.asarray(qsym)
@@ -396,16 +520,32 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     nitermax = 10
     theta_iter = cp.zeros(nitermax, dtype=DTYPEf) - 1.
 
+    grains = unigrain[iback]
+    GROD = cp.zeros(grains.size, dtype=cp.float32)
+
     theta_unic = cp.zeros(len(unigrain), dtype=DTYPEf) + 999.
     qavg_unic = cp.zeros((len(unigrain), 4), dtype=cp.float32)
     qdis_unic = cp.zeros((len(unigrain), 4), dtype=cp.float64)
 
-    grains = unigrain[iback]
-    GROD = cp.zeros(grains.size, dtype=cp.float32)
+    # update iunic to account for the median quaternion in each grain, instead of the first, to initialize the average loop:
+    qmed = cp.zeros((len(unigrain), 4), dtype=DTYPEf)
+    qmed[:,0] = ndix.median(qarr[:,0], grains, index=unigrain)
+    qmed[:,1] = ndix.median(qarr[:,1], grains, index=unigrain)
+    qmed[:,2] = ndix.median(qarr[:,2], grains, index=unigrain)
+    qmed[:,3] = ndix.median(qarr[:,3], grains, index=unigrain)
+    qmed = qmed[iback] # temporarily stores qmed back to full size ncrys
+    q4_cosang2(qmed, qarr, GROD) # temporarily stores cosine in GROD
+
+    # free memory before starting the loop:
+    qmed = qmed[0:1]*0.
+    mempool.free_all_blocks()
+
+    imed = ndix.maximum_position(GROD, grains, index=unigrain)
+    imed = cp.squeeze(cp.array(imed, dtype=DTYPEi))
+    qref_unic = qarr[imed]
+    #qref_unic = qarr[iunic]
+
     while (theta_unic.max() > 0.2) and (ii < nitermax):
-        if ii == 0:
-            # initialize avg orientation:
-            qref_unic = qarr[iunic]
         qdis = qref_unic[iback] # temporarily stores reference orientation before update
 
         # disorientation of each crystal wrt average orientation:

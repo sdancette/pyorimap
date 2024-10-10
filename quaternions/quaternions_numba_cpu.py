@@ -399,7 +399,59 @@ def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
 
     return qdis, ii
 
-@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
+@njit(Tuple((float32[:,:], int32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
+def q4_to_FZ(qarr, qsym):
+    """
+    Move quaternions to Fundamental Zone based on crystal symmetries.
+
+    The Fundamental Zone corresponds to the i_th equivalent orientation with the lowest angle wrt the reference frame.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+
+    Returns
+    -------
+    qFZ : ndarray
+        equivalent quaternion array in the Fundamental Zone.
+    ii : ndarray
+        if `return_index`=True, the index of the i_th equivalent quaternion corresponding to Fundamental Zone.
+
+    Examples
+    --------
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> qFZ, isym = q4_to_FZ(qsym, qsym)
+    >>> ref = np.tile(np.array([1,0,0,0], dtype=DTYPEf), 24).reshape(24, -1)
+    >>> np.allclose(qFZ, ref, atol=1e-6)
+    True
+    >>> qarr = q4np.q4_random(1024)
+    >>> qFZ, isym = q4_to_FZ(qarr, qsym)
+    >>> qFZ2, isym2 = q4np.q4_to_FZ(qarr, qsym, return_index=True)
+    >>> np.allclose(qFZ, qFZ2, atol=1e-6)
+    True
+    >>> np.allclose(isym, isym2)
+    True
+    """
+    n = qarr.shape[0]
+    qFZ = np.zeros((n, 4), dtype=np.float32)
+    ii = np.zeros(n, dtype=np.int32)
+
+    for isym, q in enumerate(qsym):
+        qequ = q4_mult(qarr, qsym[isym:isym+1,:])
+        for j in prange(n):
+            a0 = min(abs(qFZ[j,0]), 1.)
+            a1 = min(abs(qequ[j,0]), 1.)
+            if a1 > a0:
+                qFZ[j,:] = qequ[j,:]
+                ii[j] = isym
+    qFZ = q4_positive(qFZ, _EPS)
+
+    return qFZ, ii
+
+#@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mean_disori(qarr, qsym):
     """
     Average orientation and disorientation (GOS and GROD).
@@ -445,11 +497,17 @@ def q4_mean_disori(qarr, qsym):
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
     ncrys = qarr.shape[0]
-    while (theta > 0.2) and (ii < nitermax):
-        if ii == 0:
-            # initialize avg orientation:
-            qref = qarr[0:1,:]
 
+    # initialize avg orientation:
+    #qref = qarr[0:1,:]
+    qmed = np.atleast_2d(np.median(qarr, axis=0))
+    cosang = np.minimum(np.abs( qmed[0,0]*qarr[:,0] +
+                                qmed[0,1]*qarr[:,1] +
+                                qmed[0,2]*qarr[:,2] +
+                                qmed[0,3]*qarr[:,3]), 1.)
+    imed = np.argmax(cosang)
+    qref = qarr[imed:imed+1,:]
+    while (theta > 0.2) and (ii < nitermax):
         # disorientation of each crystal wrt average orientation:
         qdis, _ = q4_disori_quat(qref, qarr, qsym, frame=1, method=1)
 
@@ -470,9 +528,11 @@ def q4_mean_disori(qarr, qsym):
         ii += 1
 
     # angles:
-    GROD = np.zeros(ncrys, dtype=DTYPEf)
-    for j in prange(ncrys):
-        GROD[j] = np.arccos(min(abs(qdis[j,0]), 1.))*2*180/np.pi
+    GROD = np.minimum(np.abs(qdis[:,0]), 1.)
+    GROD = np.arccos(GROD, dtype=DTYPEf)*2*180/np.pi
+    #GROD = np.zeros(ncrys, dtype=DTYPEf)
+    #for j in prange(ncrys):
+    #    GROD[j] = np.arccos(min(abs(qdis[j,0]), 1.))*2*180/np.pi
 
     GOS = GROD.mean()
     GROD_stat = np.array([GOS,
@@ -521,10 +581,10 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     Examples
     --------
     >>> qa = q4np.q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024)
+    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4_mult(qa[grains], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qavg, GOS, theta, GROD, theta_iter = q4_mean_multigrain(qarr, qsym, unic, iunic, iback)
     >>> ang = q4np.q4_angle(qa, qavg)
@@ -536,16 +596,28 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     nitermax = 10
     theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
 
+    grains = unigrain[iback]
+
     #unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
     theta_unic = np.zeros(len(unigrain), dtype=DTYPEf) + 999.
     theta = theta_unic[iback]
     qdis = np.zeros_like(qarr)
 
-    grains = unigrain[iback]
+    # update iunic to account for the median quaternion in each grain, instead of the first, to initialize the average loop:
+    qmed = np.zeros((len(unigrain), 4), dtype=DTYPEf)
+    qmed[:,0] = ndi.median(qarr[:,0], grains, index=unigrain)
+    qmed[:,1] = ndi.median(qarr[:,1], grains, index=unigrain)
+    qmed[:,2] = ndi.median(qarr[:,2], grains, index=unigrain)
+    qmed[:,3] = ndi.median(qarr[:,3], grains, index=unigrain)
+    qmed = qmed[iback] # back to full size ncrys
+    cosang = q4_cosang2(qmed, qarr)
+
+    imed = ndi.maximum_position(cosang, grains, index=unigrain)
+    imed = np.squeeze(np.array(imed, dtype=DTYPEi))
+    qref_unic = qarr[imed]
+    #qref_unic = qarr[iunic]
+
     while (theta_unic.max() > 0.2) and (ii < nitermax):
-        if ii == 0:
-            # initialize avg orientation:
-            qref_unic = qarr[iunic]
         qref_tot = qref_unic[iback]
 
         # disorientation of each crystal wrt average orientation:
