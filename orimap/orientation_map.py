@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_structured
 from numba import njit, prange, int8, int32, float32
+from numba.types import Tuple as nTuple
 
 #logging.basicConfig(filename='orimap.log', level=logging.INFO, format='%(asctime)s %(message)s')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -111,7 +112,7 @@ class OriMapParameters:
     selem: StructuringElement = field(default_factory=lambda: selem_default)
     thres_HAGB: float = 10.
     thres_LAGB: float = 1.
-    grain_cluster_method: str = 'graph'
+    grain_cluster_method: str = 'label'
     grain_size_bounds: List[int] = field(default_factory=lambda: [1, 2**31])
     grain_phase_bounds: List[int] = field(default_factory=lambda: [1, 255])
     dim3D: bool = True
@@ -239,9 +240,11 @@ class OriMap(pv.ImageData):
         if self.params.grain_cluster_method == 'graph':
             self._build_cell_graph(symmetric=False)
             self._get_connected_components()
-            self._filter_grains()
-            #self._get_average_grain_by_grain()
-            self._get_average_grains_by_phase()
+        else:
+            self._get_labels()
+        self._filter_grains()
+        #self._get_average_grain_by_grain()
+        self._get_average_grains_by_phase()
         self.save(self.params.filename[:-4]+'.vtk')
 
     def _get_cell_coords_from_points(self, method=1):
@@ -262,7 +265,7 @@ class OriMap(pv.ImageData):
             # construct the point mask explicitely for faster access
             pass
 
-    def _get_neighborhood(self):
+    def _get_neighborhood(self, disori=True):
         """
         Get neighbors with given connectivity and corresponding disorientation.
         NB1: disorientation is set to +362. for potential cell neighbors outside of the grid bounds.
@@ -285,9 +288,10 @@ class OriMap(pv.ImageData):
             logging.info("... ineb {}".format(ineb))
             self.neighbors[:,ineb] = self._get_neighbors_for_ineb(xyzC, dxyz, ineb)
 
-        logging.info("Starting to compute neighbor disorientation.")
-        self._get_disori_by_phase()
-        logging.info("Finished to compute neighbor disorientation.")
+        if disori:
+            logging.info("Starting to compute neighbor disorientation.")
+            self._get_disori_by_phase()
+            logging.info("Finished to compute neighbor disorientation.")
 
     def _get_neighbors_for_ineb(self, xyzC, dxyz, ineb):
         """
@@ -333,7 +337,20 @@ class OriMap(pv.ImageData):
                 self.params.phase_to_crys[phi].get_qsym()
                 qsym = self.params.phase_to_crys[phi].qsym
 
-            self.qarray[whrPhi] = q4np.q4_to_FZ(qarr, qsym)
+            if self.params.compute_mode == 'numba_gpu':
+                qarr_gpu = cp.asarray(qarr)
+                qsym_gpu = cp.asarray(qsym)
+                qFZ_gpu = cp.zeros_like(qarr_gpu)
+                q4nGPU.q4_to_FZ(qarr_gpu, qsym_gpu, qFZ_gpu)
+                self.qarray[whrPhi] = cp.asnumpy(qFZ_gpu)
+
+                qarr_gpu = qarr_gpu[0:1]*0.
+                qFZ_gpu = qarr_gpu[0:1]*0.
+                mempool.free_all_blocks()
+            elif self.params.compute_mode == 'numba_cpu':
+                self.qarray[whrPhi], _ = q4nCPU.q4_to_FZ(qarr, qsym)
+            else:
+                self.qarray[whrPhi] = q4np.q4_to_FZ(qarr, qsym)
 
     def _get_disori_by_phase(self):
         """
@@ -380,8 +397,6 @@ class OriMap(pv.ImageData):
                 qsym_gpu = cp.asarray(qsym)
                 qa_gpu = qarr_gpu[whrPhi]
                 deso_gpu = cp.asarray(self.deso[whrPhi])
-                print('GPU mem, start, used:', mempool.used_bytes()/1024**2)
-                print('GPU mem, start, total:', mempool.total_bytes()/1024**2)
             elif (self.params.compute_mode == 'cupy'):
                 qsym_gpu = cp.asarray(qsym)
                 qa_gpu = qarr_gpu[whrPhi]
@@ -404,8 +419,6 @@ class OriMap(pv.ImageData):
                 elif self.params.compute_mode == 'numba_gpu':
                     qb_gpu = qarr_gpu[theNeb]
                     q4nGPU.q4_disori_angle(qa_gpu, qb_gpu, qsym_gpu, deso_gpu[:,ineb], nthreads=256)
-                    print('GPU mem, middle, used:', mempool.used_bytes()/1024**2)
-                    print('GPU mem, middle, total:', mempool.total_bytes()/1024**2)
                     qb_gpu = qb_gpu[0:1]*0. # free memory for next neighbor
                 elif self.params.compute_mode == 'cupy':
                     qb_gpu = qarr_gpu[theNeb]
@@ -447,8 +460,8 @@ class OriMap(pv.ImageData):
             qarr_gpu = qarr_gpu[0:1]*0.
             mempool.free_all_blocks()
             pinned_mempool.free_all_blocks()
-            print('GPU mem, final, used:', mempool.used_bytes()/1024**2)
-            print('GPU mem, final, total:', mempool.total_bytes()/1024**2)
+            #print('GPU mem, final, used:', mempool.used_bytes()/1024**2)
+            #print('GPU mem, final, total:', mempool.total_bytes()/1024**2)
 
     def _get_connected_components(self):
         """
@@ -476,6 +489,31 @@ class OriMap(pv.ImageData):
             self.Adjmat += self.Adjmat.T
 
         logging.info("Finished to build cell graph.")
+
+    def _get_labels(self):
+        """
+        Get labeled regions based on neighborhood and disorientation values.
+        """
+        logging.info("Starting to get labels with {} deg threshold for HAGB.".format(self.params.thres_HAGB))
+
+        labels, tocorr = loop_on_cells_neighbors(self.neighbors, self.deso, thres=self.params.thres_HAGB, nlabmax=2**16, ncorrmax=64)
+
+        reg = np.repeat(np.arange(tocorr.shape[0]), tocorr.shape[1])
+        nebreg = tocorr.flatten()
+        whr = (nebreg > 0)
+        reg = reg[whr]
+        nebreg = nebreg[whr] - 1
+        val = np.ones(nebreg.size, dtype=np.uint8)
+
+        Adjmat = sparse.csr_array((val, (reg, nebreg)),
+                                shape=(tocorr.shape[0], tocorr.shape[0]), dtype=np.uint8)
+        ncomp, newlab = sparse.csgraph.connected_components(Adjmat, directed=False, return_labels=True)
+
+        unic, iback, counts = np.unique(labels, return_inverse=True, return_counts=True)
+
+        self.cell_data['region'] = newlab[iback] + 1 # starting at 1 instead of 0
+
+        logging.info("Finished to compute {} region labels.".format(ncomp))
 
     def _filter_grains(self):
         """
@@ -655,7 +693,6 @@ class OriMap(pv.ImageData):
         self.cell_data['GOS'] = GOS
 
         logging.info("Finished to compute grain average orientation and GROD (grain by grain).")
-
 
     def _save_phase_info(self):
         """
@@ -923,12 +960,11 @@ def index_to_xyz(ii, dimensions, spacing, bounds, mode='cells', method=1):
 
     return np.column_stack((x,y,z)).astype(DTYPEf)
 
-
 @njit(int32[:](float32[:],float32[:],float32[:],int32[:],float32[:],float32[:],int8), fastmath=True, parallel=True)
 def xyz_to_index_numba(x, y, z, dimensions, spacing, bounds, mode=1):
     """
     Return the cell/point indices in the grid from (x,y,z) coordinates.
-    Numba version.
+    Numba_cpu version.
     """
     if mode == 1: # cell mode
         nx, ny, nz = dimensions[0]-1, dimensions[1]-1, dimensions[2]-1
@@ -951,3 +987,89 @@ def xyz_to_index_numba(x, y, z, dimensions, spacing, bounds, mode=1):
             ii[i] = -1
     return ii
 
+@njit(nTuple((int32[:], int32[:,:]))(int32[:,:], float32[:,:], float32, int32, int32), fastmath=True)
+def loop_on_cells_neighbors(neighbors, deso, thres=5., nlabmax=2**16, ncorrmax=32):
+    """
+    Loop on cells to define homogeneous regions.
+    Numba_cpu version.
+
+    Parameters
+    ----------
+    neighbors : ndarray
+        (ncells, nneb) array of int32 neighbor indices.
+    deso : ndarray
+        (ncells, nneb) array of float32 disorientation values.
+    thres : float
+        threshold value below which two neighbors will be connected.
+    nlabmax : int, default=2**16
+        up to nlabmax different regions (65535 by default).
+    ncorrmax : int, default=32
+        one region can be merged with up to ncorrmax other regions after the first pass on cell neighbors (32 by default).
+
+    Returns
+    -------
+    labels : ndarray
+        (ncells, ) array of grain region numbers.
+    tocorr : ndarray
+        (ncorrmax, 2) array of region labels that have to be merged.
+    """
+    labels = np.zeros_like(neighbors[:,0])
+    labmax = 0
+    nneb = neighbors.shape[1]
+    #nlabmax = 2**16 # up to 65535 different regions
+    #ncorrmax = 128  # one region can be merged with up to 128 other regions after the first pass on cell neighbors
+    tocorr = np.zeros((nlabmax,ncorrmax), dtype=np.int32)
+    ncorr = np.zeros(nlabmax, dtype=np.int32)
+    for icell in range(labels.size):
+        lab = labels[icell]
+        if lab == 0:
+            neighb = neighbors[icell, :]
+            neighbdeso = deso[icell, :]
+            neighblab = labels[neighb]
+            whr = (neighb >= 0) * (neighbdeso < thres)
+
+            newlab = False
+            if whr.sum() > 0:
+                mx = neighblab[whr].max()
+                if mx > 0:
+                    lab = mx
+                else:
+                    newlab = True
+            else:
+                newlab = True
+            if newlab:
+                lab = labels.max() + 1
+                if lab >= nlabmax:
+                    print("!!!!!!!! Z !!!!!!!! Tentative number of labels exceeding the nlabmax limit", lab, nlabmax)
+                    #logging.warning("Tentative number of labels exceeding the nlabmax limit: {} (max {})".format(lab, nlabmax))
+                tocorr[lab, 0] = lab
+            labels[icell] = lab
+
+        # propagate label to all neighbors
+        for ineb in range(nneb):
+            theneb = neighbors[icell, ineb]
+            if (theneb >= 0) and (deso[icell, ineb] < thres):
+                if (labels[theneb] != lab) and (labels[theneb] > 0):
+                    lab1 = min([labels[theneb], lab])
+                    lab2 = max([labels[theneb], lab])
+                    whr = (tocorr[lab1,:] > 0)
+                    ncorr = np.sum( whr )
+                    if ncorr >= ncorrmax:
+                        print("!!!!!!!! Z !!!!!!!! Tentative number of merges exceeding the ncorrmax limit for label", lab, ncorr, ncorrmax)
+                        #logging.warning("Tentative number of merges exceeding the ncorrmax limit for label {}: {} (max {})".format(lab, ncorr, ncorrmax))
+
+                    whr = (tocorr[lab1,:] == lab2)
+                    if np.sum(whr) == 0:
+                        tocorr[lab1, ncorr] = lab2
+                    lab = lab1
+                labels[theneb] = lab
+
+    col = tocorr.sum(axis=0)
+    cmax = np.where(col > 0)[0].max()
+    tocorr = tocorr[:,:cmax+1]
+
+    row = tocorr.sum(axis=1)
+    rmax = np.where(row > 0)[0].max()
+    tocorr = tocorr[:rmax+1,:]
+
+    return labels, tocorr[1:,:]
