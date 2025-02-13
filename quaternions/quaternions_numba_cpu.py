@@ -451,6 +451,55 @@ def q4_to_FZ(qarr, qsym):
 
     return qFZ, ii
 
+@njit(float32[:,:](float32[:,:]), fastmath=True, parallel=True)
+def q4_from_eul(eul):
+    """
+    Converts Bunge Euler angles (in degrees) to quaternions.
+
+    Parameters
+    ----------
+    eul : ndarray
+        (ncrys, 3) array of Bunge Euler angles in degrees ['phi1', 'Phi', 'phi2'].
+
+    Returns
+    -------
+    qarr : ndarray
+        quaternion array of shape (ncrys, 4) and type np.float32.
+
+    Notes
+    -----
+    Bunge Euler angles correspond to a "Z X Z" sequence of successive rotations from the sample frame to the crystal frame,
+    where the 2nd and 3rd rotation apply on the rotated frame resulting from the previous rotations.
+    The present implementation follows the conventions detailed in the documentation of the
+    orilib routines by R. Quey at https://sourceforge.net/projects/orilib/.
+
+    Examples
+    --------
+    >>> qarr = q4np.q4_random(n=1024)
+    >>> eul = q4np.q4_to_eul(qarr)
+    >>> qback = q4_from_eul(eul)
+    >>> np.allclose(qarr, qback, atol=1e-6)
+    True
+    """
+    ncrys = len(eul)
+
+    qarr = np.zeros((ncrys,4), dtype=np.float32)
+
+    for j in prange(ncrys):
+        phi1 = eul[j,0] * np.pi/180.
+        Phi  = eul[j,1] * np.pi/180.
+        phi2 = eul[j,2] * np.pi/180.
+
+        qarr[j,0] = np.cos(Phi/2)*np.cos((phi1+phi2)/2)
+        qarr[j,1] = np.sin(Phi/2)*np.cos((phi1-phi2)/2)
+        qarr[j,2] = np.sin(Phi/2)*np.sin((phi1-phi2)/2)
+        qarr[j,3] = np.cos(Phi/2)*np.sin((phi1+phi2)/2)
+
+    # positive quaternion:
+    qarr = q4_positive(qarr, _EPS)
+
+    return qarr
+
 #@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mean_disori(qarr, qsym):
     """

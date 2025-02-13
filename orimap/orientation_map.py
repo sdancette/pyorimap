@@ -320,7 +320,12 @@ class OriMap(pv.ImageData):
         try:
             ncrys = len(self.qarray)
         except AttributeError:
-            self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+            logging.info("... Satrting to generate quaternion array from Euler angles.")
+            if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
+                self.qarray = q4nCPU.q4_from_eul(self.cell_data['eul'])
+            else:
+                self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+            logging.info("... Finished to generate quaternion array from Euler angles.")
 
         # loop by phase ID for disorientation calculation:
         thephases = sorted(list(self.params.phase_to_crys.keys()))
@@ -1016,8 +1021,6 @@ def loop_on_cells_neighbors(neighbors, deso, thres=5., nlabmax=2**16, ncorrmax=3
     labels = np.zeros_like(neighbors[:,0])
     labmax = 0
     nneb = neighbors.shape[1]
-    #nlabmax = 2**16 # up to 65535 different regions
-    #ncorrmax = 128  # one region can be merged with up to 128 other regions after the first pass on cell neighbors
     tocorr = np.zeros((nlabmax,ncorrmax), dtype=np.int32)
     ncorr = np.zeros(nlabmax, dtype=np.int32)
     for icell in range(labels.size):
