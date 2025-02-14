@@ -300,6 +300,7 @@ class OriMap(pv.ImageData):
 
         dz = dxyz[2]; dy = dxyz[1];  dx = dxyz[0]
         dz *= self.spacing[2]; dy *= self.spacing[1];  dx *= self.spacing[0]
+        dz = dz.astype(DTYPEf); dy = dy.astype(DTYPEf); dx = dx.astype(DTYPEf)
         z = xyzC[:,2]; y = xyzC[:,1]; x = xyzC[:,0]
 
         dimensions = np.array(list(self.dimensions), dtype=DTYPEi)
