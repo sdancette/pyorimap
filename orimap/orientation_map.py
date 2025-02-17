@@ -237,6 +237,7 @@ class OriMap(pv.ImageData):
         self._move_to_FZ_by_phase()
         self._get_neighborhood()
 
+        logging.info("Grain cluster method: {}.".format(self.params.grain_cluster_method))
         if self.params.grain_cluster_method == 'graph':
             self._build_cell_graph(symmetric=False)
             self._get_connected_components()
@@ -316,12 +317,12 @@ class OriMap(pv.ImageData):
         """
         Move quaternions to Fundamental Zone, phase by phase.
         """
-        logging.info("... Moving quaternions to Fundamental Zone.")
+        logging.info("Starting to move quaternions to Fundamental Zone.")
         phase = self.cell_data['phase']
         try:
             ncrys = len(self.qarray)
         except AttributeError:
-            logging.info("... Satrting to generate quaternion array from Euler angles.")
+            logging.info("... Starting to generate quaternion array from Euler angles.")
             if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
                 self.qarray = q4nCPU.q4_from_eul(self.cell_data['eul'])
             else:
@@ -333,6 +334,7 @@ class OriMap(pv.ImageData):
         for phi in thephases:
             if phi == 0: # unindexed
                 continue
+            logging.info("... phase {}.".format(phi))
             whrPhi = (phase == phi)
             qarr = self.qarray[whrPhi]
 
@@ -357,6 +359,7 @@ class OriMap(pv.ImageData):
                 self.qarray[whrPhi], _ = q4nCPU.q4_to_FZ(qarr, qsym)
             else:
                 self.qarray[whrPhi] = q4np.q4_to_FZ(qarr, qsym)
+        logging.info("Finished to move quaternions to Fundamental Zone.")
 
     def _get_disori_by_phase(self):
         """
@@ -502,7 +505,7 @@ class OriMap(pv.ImageData):
         """
         logging.info("Starting to get labels with {} deg threshold for HAGB.".format(self.params.thres_HAGB))
 
-        labels, tocorr = loop_on_cells_neighbors(self.neighbors, self.deso, thres=self.params.thres_HAGB, nlabmax=2**16, ncorrmax=64)
+        labels, tocorr = loop_on_cells_neighbors(self.neighbors, self.deso, thres=self.params.thres_HAGB, nlabmax=8*2**16, ncorrmax=256)
 
         reg = np.repeat(np.arange(tocorr.shape[0]), tocorr.shape[1])
         nebreg = tocorr.flatten()
@@ -1025,6 +1028,9 @@ def loop_on_cells_neighbors(neighbors, deso, thres=5., nlabmax=2**16, ncorrmax=3
     tocorr = np.zeros((nlabmax,ncorrmax), dtype=np.int32)
     ncorr = np.zeros(nlabmax, dtype=np.int32)
     for icell in range(labels.size):
+        if icell % 1000000 == 0:
+            print("icell", icell)
+
         lab = labels[icell]
         if lab == 0:
             neighb = neighbors[icell, :]
