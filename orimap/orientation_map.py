@@ -321,7 +321,7 @@ class OriMap(pv.ImageData):
         try:
             ncrys = len(self.qarray)
         except AttributeError:
-            logging.info("... Satrting to generate quaternion array from Euler angles.")
+            logging.info("... Starting to generate quaternion array from Euler angles.")
             if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
                 self.qarray = q4nCPU.q4_from_eul(self.cell_data['eul'])
             else:
