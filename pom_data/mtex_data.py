@@ -22,6 +22,8 @@ def load_mtex_qsym(sym='cubic', dtype=np.float32):
         data = pkgutil.get_data('pyorimap.pom_data', 'qsym_tetra_mtex.txt')
     elif sym == 'ortho':
         data = pkgutil.get_data('pyorimap.pom_data', 'qsym_ortho_mtex.txt')
+    elif sym == 'mono':
+        data = pkgutil.get_data('pyorimap.pom_data', 'qsym_mono_mtex.txt')
     data = StringIO(data.decode('utf-8'))
     qsym = np.loadtxt(data, delimiter=',', dtype=dtype)
 

@@ -397,11 +397,11 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
     >>> theta_iter = cp.zeros(10, dtype=DTYPEf)
     >>> q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter)
     >>> ang = q4np.q4_angle(qa, cp.asnumpy(qavg[0]))
-    >>> (ang < 0.5)
+    >>> np.allclose(ang, 0., atol=0.5)
     True
     >>> qavg2, GROD2, GROD_stat2, theta_iter2 = q4np.q4_mean_disori(cp.asnumpy(qarr), cp.asnumpy(qsym))
     >>> ang2 = q4np.q4_angle(cp.asnumpy(qavg[0]), qavg2)
-    >>> (ang2 < 0.5)
+    >>> np.allclose(ang2, 0., atol=0.5)
     True
     >>> np.allclose(cp.asnumpy(GROD), GROD2, atol=0.5)
     True

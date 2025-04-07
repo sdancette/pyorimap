@@ -12,6 +12,7 @@ This module contains the following functions:
 - `q4_sym_hex()` - generate quaternions for hexagonal crystal symmetry
 - `q4_sym_tetra()` - generate quaternions for tetragonal crystal symmetry
 - `q4_sym_ortho()` - generate quaternions for orthorhombic crystal symmetry
+- `q4_sym_mono()` - generate quaternions for monoclinic crystal symmetry
 - `q4_random()` - generate random quaternions
 - `q4_from_axis_angle(axis, ang)` - generate quaternion corresponding to `ang` degrees rotation about `axis`
 - `q4_mult(qa, qb)` - compute quaternion multiplication
@@ -294,6 +295,42 @@ def q4_sym_ortho(static=True, dtype=np.float32):
         qsym[1,:] = q4_mult(q, qrot[0])
         qsym[2,:] = q4_mult(q, qrot[1])
         qsym[3,:] = q4_mult(q, qrot[2])
+
+    return qsym
+
+def q4_sym_mono(static=True, dtype=np.float32):
+    """
+    Compute the (2, 4) quaternion array for monoclinic crystal symmetry.
+
+    Returns
+    -------
+    qsym : ndarray
+        quaternion array of shape (2, 4) and type np.float32 by default.
+
+    Examples
+    --------
+    >>> np.allclose(q4_sym_mono(static=True), q4_sym_mono(static=False), atol=1e-6)
+    True
+    >>> qsym = q4_sym_mono()
+    >>> qmtex = mtex.load_mtex_qsym(sym='mono')
+    >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
+    >>> np.allclose(np.degrees(ang), np.zeros(2, dtype=np.float32), atol=0.1)
+    True
+    """
+    if static:
+        qsym = np.array([[ 1.,  0.,  0.,  0.],
+                         [ 0.,  0.,  1.,  0.]], dtype=dtype)
+    else:
+        qsym = np.zeros((2,4), dtype=dtype)
+
+        axis = np.array([0,1,0], dtype=dtype)
+        ang =  np.array( 180., dtype=dtype)
+        qrot = q4_from_axis_angle(axis, ang)
+
+        q = np.array([1,0,0,0], dtype=dtype)
+
+        qsym[0,:] = q
+        qsym[1,:] = q4_mult(q, qrot)
 
     return qsym
 
