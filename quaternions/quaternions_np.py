@@ -1445,6 +1445,121 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
 
     return qarr
 
+def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
+    """
+    Performs stereographic or equal-area projectioni of vector 'vec' in the meridian plane.
+    """
+    pi2 = 2.*np.pi
+    if north == 1:
+        x1 = 1; x2 = 2; x3 = 0
+    elif north == 2:
+        x1 = 2; x2 = 0; x3 = 1
+    elif north == 3:
+        x1 = 0; x2 = 1; x3 = 2
+    else:
+        print("Z!! choice of north pole:", north, " (should be 1 for [100], 2 for [010], 3 for [001])")
+
+    vec = np.atleast_2d(vec)
+    albeta = np.zeros((len(vec),2), dtype=dtype)
+    xyproj = np.zeros((len(vec),2), dtype=dtype)
+
+    # check Northern hemisphere:
+    reverse = (vec[:,x3] < -_EPS)
+    vec[reverse] *= -1
+
+    # alpha:
+    albeta[:,0] = np.arccos(vec[:,x3])
+    # beta:
+    whr = (np.abs(albeta[:,0]) > _EPS)
+    tmp = vec[:,x1][whr]/np.sin(albeta[:,0][whr])
+    tmp = np.minimum(tmp,1.)
+    tmp = np.maximum(tmp,-1.)
+    albeta[:,1][whr] = np.arccos(tmp)
+    albeta[:,1][vec[:,x2] < -_EPS] *= -1
+    albeta[:,1] = albeta[:,1] % pi2
+
+    xyproj[:,0] = np.cos(albeta[:,1])
+    xyproj[:,1] = np.sin(albeta[:,1])
+    if proj == "stereo": # stereographic projection
+        Op = np.tan(albeta[:,0]/2.)
+    else:                # equal-area projection
+        Op = np.sin(albeta[:,0]/2.)*np.sqrt(2.)
+    xyproj *= Op[..., np.newaxis]
+
+    return xyproj, np.degrees(albeta), reverse
+
+def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, dtype=np.float32):
+    """
+    Inverse Pole Figure projection based on crystal symmetries.
+    """
+    deg2rad = np.pi/180.
+    norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
+    axis = np.atleast_1d(axis) / norm
+    ncrys = len(qarr)
+    nsym = len(qsym)
+    if nsym == 24:
+        sym = 'cubic' if np.allclose(qsym, q4_sym_cubic(), atol=1e-6) else 'NA'
+    elif nsym == 12:
+        sym = 'hex'   if np.allclose(qsym, q4_sym_hex(), atol=1e-6) else 'NA'
+    elif nsym == 8:
+        sym = 'tetra' if np.allclose(qsym, q4_sym_tetra(), atol=1e-6) else 'NA'
+    elif nsym == 4:
+        sym = 'ortho' if np.allclose(qsym, q4_sym_ortho(), atol=1e-6) else 'NA'
+    elif nsym == 2:
+        sym = 'mono'  if np.allclose(qsym, q4_sym_mono(), atol=1e-6) else 'NA'
+
+    albeta = np.zeros((ncrys,2), dtype=dtype)+360
+    xyproj = np.zeros((ncrys,2), dtype=dtype)
+    isym   = np.zeros(ncrys, dtype=np.uint8)
+
+    for iq, q in enumerate(qsym):
+        qequ = q4_mult(qarr, q)
+        Rsa2cr = q4_to_mat(qequ)
+        vec = np.dot(Rsa2cr, axis)
+
+        xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, dtype=dtype)
+        if sym == 'cubic':
+            whr = (albeta1[:,1] < 45.+_EPS) * (albeta1[:,0] < albeta[:,0] +_EPS)
+        elif sym == 'hex':
+            whr = (albeta1[:,1] < 30.+_EPS)
+        elif sym == 'tetra':
+            whr = (albeta1[:,1] < 45.+_EPS)
+        elif sym == 'ortho':
+            whr = (albeta1[:,1] < 90.+_EPS)
+        elif sym == 'mono':
+            whr = (albeta1[:,1] < 180.+_EPS)
+        else:
+            whr = (albeta1[:,1] > -_EPS)
+        xyproj[whr,:] = xyproj1[whr,:]
+        albeta[whr,:] = albeta1[whr,:]
+        isym[whr] = iq
+
+    RGB = np.zeros((ncrys,3), dtype=dtype)
+    if sym == 'cubic':
+        alpha_max = np.degrees( np.arccos( np.sqrt(1./(2. + np.tan(albeta[:,1]*deg2rad)**2)) ) )
+        beta_max = np.ones(ncrys, dtype=DTYPEf)*45.
+    elif sym == 'hex':
+        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
+        beta_max = np.ones(ncrys, dtype=DTYPEf)*30.
+    elif sym == 'tetra':
+        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
+        beta_max = np.ones(ncrys, dtype=DTYPEf)*45.
+    elif sym == 'ortho':
+        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
+        beta_max = np.ones(ncrys, dtype=DTYPEf)*90.
+    elif sym == 'mono':
+        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
+        beta_max = np.ones(ncrys, dtype=DTYPEf)*180.
+    else:
+        print("Z!! unproper symmetry for IPF RGB")
+    RGB[:,0] =  1. - albeta[:,0]/alpha_max
+    RGB[:,1] = (1. - albeta[:,1]/beta_max) * albeta[:,0]/alpha_max
+    RGB[:,2] = (albeta[:,1]/beta_max)      * albeta[:,0]/alpha_max
+    mx = RGB.max(axis=1)
+    RGB = np.uint8( np.round(RGB*255/ mx[..., np.newaxis], decimals=0) )
+
+    return xyproj, RGB, albeta, isym
+
 #def XXXq4_from_mat(R, dtype=np.float32):
 #    """
 #    Converts rotation matrices to quaternions.
