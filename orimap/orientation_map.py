@@ -15,6 +15,7 @@ import numpy as np
 import cupy as cp
 import pyvista as pv
 import skimage as sk
+import scipy.ndimage as ndi
 from scipy import sparse
 
 from pyorimap.quaternions import quaternions_np as q4np
@@ -71,7 +72,7 @@ class StructuringElement:
             self.selem = np.ones((w,w,w), dtype=np.uint8)
 
         dxyz = np.column_stack(np.nonzero(self.selem))[:,::-1] - self.radius # equivalent to np.column_stack(np.where(selem>0)) - r
-        # restrict to neighbors in 1 of the 2 opposite directions
+        # restrict to neighbors in one of the two opposite directions
         # (relation in the other direction will be evaluated from the other cell):
         nneb = int((len(dxyz)-1)/2)
         dxyz = dxyz[nneb+1:]
@@ -227,6 +228,58 @@ class OriMap(pv.ImageData):
 
         # force dtype of points to np.float32? : ImageData.points can't be set...
 
+    def get_IPF_proj(self, proj='stereo'):
+        """
+        Compute IPF projection.
+        """
+        sampleAx = np.array([[1,0,0],[0,1,0],[0,0,1]], dtype=DTYPEf)
+
+        # Check for the presence of qarray:
+        phase = self.cell_data['phase']
+        try:
+            ncrys = len(self.qarray)
+        except AttributeError:
+            logging.info("... Starting to generate quaternion array from Euler angles.")
+            if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
+                self.qarray = q4nCPU.q4_from_eul(self.cell_data['eul'])
+            else:
+                self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+            logging.info("... Finished to generate quaternion array from Euler angles.")
+            ncrys = len(self.qarray)
+
+        logging.info("Starting to compute IPF projection.")
+
+        # loop by phase ID for IPF calculation:
+        thephases = sorted(list(self.params.phase_to_crys.keys()))
+        self.cell_data['IPFx'] = np.zeros((ncrys,3), dtype=DTYPEf)
+        self.cell_data['IPFy'] = np.zeros((ncrys,3), dtype=DTYPEf)
+        self.cell_data['IPFz'] = np.zeros((ncrys,3), dtype=DTYPEf)
+        for phi in thephases:
+            if phi == 0: # unindexed
+                continue
+            logging.info("... phase {}.".format(phi))
+            whrPhi = (phase == phi)
+            qarr = self.qarray[whrPhi]
+
+            try:
+                qsym = self.params.phase_to_crys[phi].qsym
+            except AttributeError:
+                self.params.phase_to_crys[phi].infer_symmetry()
+                self.params.phase_to_crys[phi].get_qsym()
+                qsym = self.params.phase_to_crys[phi].qsym
+
+            for iax, axis in enumerate(sampleAx):
+                logging.info("... ... axis {}.".format(iax))
+                xyproj, RGB, albeta, isym = q4np.q4_to_IPF(qarr, axis=axis, qsym=qsym, proj=proj, north=3)
+                if iax == 0:
+                    self.cell_data['IPFx'][whrPhi] = RGB
+                elif iax == 1:
+                    self.cell_data['IPFy'][whrPhi] = RGB
+                elif iax == 2:
+                    self.cell_data['IPFz'][whrPhi] = RGB
+
+        self.save(self.params.filename[:-4]+'.vtk')
+
     def get_grains(self):
         """
         Compute grains based on disorientation with cell neighbors.
@@ -244,9 +297,43 @@ class OriMap(pv.ImageData):
         else:
             self._get_labels()
         self._filter_grains()
+        self._get_KAM()
         #self._get_average_grain_by_grain()
         self._get_average_grains_by_phase()
         self.save(self.params.filename[:-4]+'.vtk')
+
+    def _get_KAM(self):
+        """
+        Compute KAM from neighbor disorientation.
+        """
+        grains = self.cell_data['grains']
+        KAM = np.zeros(self.n_cells, dtype=DTYPEf)
+        nKAM = np.zeros(self.n_cells, dtype=np.uint16)
+        #self.cell_data['KAM'] = -1 # np.nan
+
+        try:
+            shape = self.deso.shape
+        except AttributeError:
+            logging.error("Neighor disorientation must be calculated beforehand for KAM computation.")
+
+        for ineb in range(self.params.selem.nneb):
+            desoNeb = self.deso[:,ineb]
+            theNeb = self.neighbors[:,ineb]
+            graNeb = grains[theNeb]
+            whrSameGr = (grains == graNeb) * (theNeb >= 0)
+
+            KAM[whrSameGr] += desoNeb[whrSameGr]
+            nKAM[whrSameGr] += 1
+            # also add the opposite neighbor direction :
+            KAM[theNeb[whrSameGr]] += desoNeb[whrSameGr]
+            nKAM[theNeb[whrSameGr]] += 1
+
+        whrKAM = (nKAM > 0)
+        KAM[whrKAM] = KAM[whrKAM]/nKAM[whrKAM]
+        KAM[~whrKAM] = np.nan
+
+        self.cell_data['KAM'] = KAM
+        logging.info("Finished to compute KAM up to {} neighbors.".format(2*self.params.selem.nneb))
 
     def _get_cell_coords_from_points(self, method=1):
         """
@@ -566,6 +653,7 @@ class OriMap(pv.ImageData):
         """
         grains = self.cell_data['grains']
         phase = self.cell_data['phase']
+        KAM = self.cell_data['KAM']
         GROD = np.zeros(grains.shape, dtype=DTYPEf)
         GOS = np.zeros(grains.shape, dtype=DTYPEf)
         theta = np.zeros(grains.shape, dtype=DTYPEf)
@@ -639,6 +727,7 @@ class OriMap(pv.ImageData):
         grdata.phi2 = eul[:,2]
         grdata.GOS = GOS[iunic]
         grdata.theta = theta[iunic]
+        grdata.KAMavg = ndi.mean(KAM, labels=grains, index=unic)
         np.savetxt(self.params.filename[:-4]+'-grains.txt', grdata,
                 fmt="%6i %4i %9i %10.6f %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f", header=str(grdata.dtype.names))
 

@@ -13,6 +13,7 @@ The module contains the following functions:
 import logging
 import numpy as np
 import pyvista as pv
+import scipy.ndimage as ndi
 from scipy.spatial import KDTree
 
 from pyorimap.quaternions import quaternions_np as q4np
@@ -21,7 +22,7 @@ from pyorimap.orimap import orientation_map as om
 DTYPEf = np.float32
 DTYPEi = np.int32
 
-def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=1, fvol=None, phase_to_crys=None, theta_spread=None):
+def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, phases=1, fvol=None, phase_to_crys=None, theta_spread=None, spread_type='radial'):
     """
     Generate a random Voronoi microstructure and return an OriMap object
     (inheriting from pyvista ImageData object).
@@ -128,14 +129,33 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     whr = (grid.points[:,0] < grid.bounds[1]-tol)*\
           (grid.points[:,1] < grid.bounds[3]-tol)*\
           (grid.points[:,2] < grid.bounds[5]-tol)
-    xyzCells = grid.points[whr]
+    xyzCells = grid.points[whr].astype(DTYPEf)
     if not grid.n_cells == len(xyzCells):
         logging.error("n_cells does not match with the number of calculated cell centers: {}, {}.".format(grid.n_cells, len(xyzCells)))
 
-    seeds = np.random.rand(ngrains,3)
+    #seeds = np.random.rand(ngrains,3).astype(DTYPEf)
+    if grid.params.dim3D:
+        nx = (ngrains)**(1./3)
+        step = 1./nx
+        a = np.arange(0.,1.,step)
+        xv, yv, zv = np.meshgrid(a, a, a, sparse=False, indexing='xy')
+        seeds = np.zeros((len(xv.flatten()),3), dtype=DTYPEf)
+        seeds[:,0] = xv.flatten() + step/2
+        seeds[:,1] = yv.flatten() + step/2
+        seeds[:,2] = zv.flatten() + step/2
+    else:
+        nx = np.sqrt(ngrains)
+        step = 1./nx
+        a = np.arange(0.,1.,step)
+        xv, yv = np.meshgrid(a, a, sparse=False, indexing='xy')
+        seeds = np.zeros((len(xv.flatten()),3), dtype=DTYPEf)
+        seeds[:,0] = xv.flatten() + step/2
+        seeds[:,1] = yv.flatten() + step/2
+    seeds += (np.random.rand(len(seeds),3)*2 -1)*step/3
     seeds[:,0] *= dimX
     seeds[:,1] *= dimY
     seeds[:,2] *= dimZ
+    ngrains = len(seeds)
 
     logging.info("Starting to compute KDTree.")
     tree = KDTree(seeds)
@@ -169,14 +189,46 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
         ngrains = len(unic)
         newu = np.arange(ngrains)
         grains = newu[rindices]
+        unic = newu
 
     qseeds = q4np.q4_random(ngrains)
     eulseeds = q4np.q4_to_eul(qseeds)
     if theta_spread is None:
         grid.qarray = qseeds[grains,:]
     else:
-        qspread = q4np.q4_orispread(ncrys=len(grains), thetamax=theta_spread, misori=True)
-        grid.qarray = q4np.q4_mult(qseeds[grains,:], qspread)
+        if spread_type=='radial':
+            xyzG = np.zeros((len(unic),3), dtype=DTYPEf)
+            xyzG[:,0] = ndi.mean(xyzCells[:,0], labels=grains, index=unic)
+            xyzG[:,1] = ndi.mean(xyzCells[:,1], labels=grains, index=unic)
+            xyzG[:,2] = ndi.mean(xyzCells[:,2], labels=grains, index=unic)
+
+            #vec = xyzCells - seeds[grains,:]
+            vec = xyzCells - xyzG[grains,:]
+            dist2seed = np.sqrt(np.sum(vec**2, axis=1))
+            vec /= dist2seed[..., np.newaxis]
+            qspread = np.zeros_like(grid.qarray)
+
+            #if grid.params.dim3D:
+            #    grSize = (counts*spacing**3)**(1./3)
+            #else:
+            #    grSize = (counts*spacing**2)**(1./2)
+            #theta = np.radians(dist2seed / (grSize[grains]/2) * theta_spread)
+            mxDist = ndi.maximum(dist2seed, labels=grains, index=unic)
+            theta = np.radians(dist2seed / mxDist[grains] * theta_spread)
+            grid.cell_data['theta_spread'] = np.degrees(theta)
+
+            qspread[:,0] = np.cos(theta/2)
+            qspread[:,1] = vec[:,0]*np.sin(theta/2)
+            qspread[:,2] = vec[:,1]*np.sin(theta/2)
+            qspread[:,3] = vec[:,2]*np.sin(theta/2)
+            norm = np.sqrt(np.sum(qspread**2, axis=1))
+            qspread /= norm[..., np.newaxis]
+            grid.qarray = q4np.q4_mult(qspread, qseeds[grains,:]) # both expressed in the ref. frame
+            #grid.qarray = q4np.q4_mult(qseeds[grains,:], qspread) # qsread expressed in the cryst. frame
+        else:
+            # random spread:
+            qspread = q4np.q4_orispread(ncrys=len(grains), thetamax=theta_spread, misori=True)
+            grid.qarray = q4np.q4_mult(qseeds[grains,:], qspread)
 
     grdata.grain = unic + 1
     grdata.phase = grid.cell_data['phase'][indices]

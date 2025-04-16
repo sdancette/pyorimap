@@ -1447,7 +1447,29 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
 
 def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
     """
-    Performs stereographic or equal-area projectioni of vector 'vec' in the meridian plane.
+    Performs stereographic or equal-area projection of vector `vec` in the equatorial plane.
+
+    Parameters
+    ----------
+    vec : ndarray
+        (ncrys, 3) array of unit vectors to be projected.
+    proj : str, default='stereo'
+        type of projection, 'stereo' for stereographic or 'equal-area'.
+    north : int, default=3
+        North pole defining the projection plane.
+
+    Returns
+    -------
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the equatorial plane.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+    reverse : ndarray
+        boolean array indicating where the input unit vectors were pointing to the Southern hemisphere and reversed.
+
+    Examples
+    --------
+    >>> qa = q4_random(1000)
     """
     pi2 = 2.*np.pi
     if north == 1:
@@ -1457,7 +1479,8 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
     elif north == 3:
         x1 = 0; x2 = 1; x3 = 2
     else:
-        print("Z!! choice of north pole:", north, " (should be 1 for [100], 2 for [010], 3 for [001])")
+        logging.warning("Z!! choice of north pole: {} (should be 1 for [100], 2 for [010], 3 for [001])".format(north))
+        x1 = 0; x2 = 1; x3 = 2
 
     vec = np.atleast_2d(vec)
     albeta = np.zeros((len(vec),2), dtype=dtype)
@@ -1468,6 +1491,8 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
     vec[reverse] *= -1
 
     # alpha:
+    vec[:,x3] = np.minimum(vec[:,x3],1.)
+    vec[:,x3] = np.maximum(vec[:,x3],-1.)
     albeta[:,0] = np.arccos(vec[:,x3])
     # beta:
     whr = (np.abs(albeta[:,0]) > _EPS)
@@ -1491,6 +1516,34 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
 def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, dtype=np.float32):
     """
     Inverse Pole Figure projection based on crystal symmetries.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (ncrys, 4) array of quaternions.
+    axis : array_like
+        sample vector (in the reference frame) to be projected in the crystal IPF triangle.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+    proj : str, default='stereo'
+        type of projection, 'stereo' for stereographic or 'equal-area'.
+    north : int, default=3
+        North pole defining the projection plane.
+
+    Returns
+    -------
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the standard triangle.
+    RGB : ndarray
+        (ncrys, 3) array of RGB color code for the projection.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+    isym : ndarray
+        index of the ith equivalent orientation corresponding to the standard triangle.
+
+    Examples
+    --------
+    >>> qa = q4_random(1000)
     """
     deg2rad = np.pi/180.
     norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
@@ -1507,6 +1560,8 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
         sym = 'ortho' if np.allclose(qsym, q4_sym_ortho(), atol=1e-6) else 'NA'
     elif nsym == 2:
         sym = 'mono'  if np.allclose(qsym, q4_sym_mono(), atol=1e-6) else 'NA'
+    else:
+        sym = 'unknown'
 
     albeta = np.zeros((ncrys,2), dtype=dtype)+360
     xyproj = np.zeros((ncrys,2), dtype=dtype)
@@ -1551,12 +1606,15 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
         alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
         beta_max = np.ones(ncrys, dtype=DTYPEf)*180.
     else:
-        print("Z!! unproper symmetry for IPF RGB")
+        logging.error("Z!! unproper symmetry {} for IPF RGB".format(sym))
     RGB[:,0] =  1. - albeta[:,0]/alpha_max
     RGB[:,1] = (1. - albeta[:,1]/beta_max) * albeta[:,0]/alpha_max
     RGB[:,2] = (albeta[:,1]/beta_max)      * albeta[:,0]/alpha_max
     mx = RGB.max(axis=1)
-    RGB = np.uint8( np.round(RGB*255/ mx[..., np.newaxis], decimals=0) )
+    RGB /= mx[..., np.newaxis]
+    #RGB = np.uint8( np.round(RGB*255/ mx[..., np.newaxis], decimals=0) )
+
+    logging.info("Computed IPF projection for axis {}.".format(axis))
 
     return xyproj, RGB, albeta, isym
 
