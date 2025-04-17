@@ -500,6 +500,62 @@ def q4_from_eul(eul):
 
     return qarr
 
+@njit(float32[:,:,:](float32[:,:]), fastmath=True, parallel=True)
+def q4_to_mat(qarr):
+    """
+    Compute rotation matrix from crystal quaternion.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (n, 4) array of quaternions or single quaternion of shape (4,).
+
+    Returns
+    -------
+    R : ndarray
+        (n, 3, 3) array of rotation matrices or single rotation matrix
+        of shape (3, 3) depending on input. Dtype is np.float32 by default.
+
+    Notes
+    -----
+    When the quaternions represent rotations from the sample frame
+    to the crystal frame (as obtained for example from Bunge Euler angles),
+    the columns of the resulting rotation matrix correspond to the unit vectors
+    of the sample (macroscopic) frame expressed in the crystal frame.
+    The present implementation follows the conventions detailed in the documentation of the
+    orilib routines by R. Quey at https://sourceforge.net/projects/orilib/.
+
+    Examples
+    --------
+    >>> R = q4np.mat_from_eul([[0,45,30],[10,20,30],[0,180,10]])
+    >>> qarr = q4np.q4_from_mat(R)
+    >>> Rback = q4_to_mat(qarr)
+    >>> np.allclose(R, Rback, atol=1e-6)
+    True
+    >>> qarr = q4np.q4_random(1024)
+    >>> Ra = q4np.q4_to_mat(qarr)
+    >>> Rb = q4_to_mat(qarr)
+    >>> np.allclose(Ra, Rb, atol=1e-6)
+    True
+    """
+    ncrys = len(qarr)
+    R = np.zeros((ncrys, 3, 3), dtype=DTYPEf)
+
+    for j in prange(ncrys):
+        q0 = qarr[j,0]; q1 = qarr[j,1]; q2 = qarr[j,2]; q3 = qarr[j,3]
+        R[j,0,0] = q0**2+q1**2-1./2
+        R[j,1,0] = q1*q2-q0*q3
+        R[j,2,0] = q1*q3+q0*q2
+        R[j,0,1] = q1*q2+q0*q3
+        R[j,1,1] = q0**2+q2**2-1./2
+        R[j,2,1] = q2*q3-q0*q1
+        R[j,0,2] = q1*q3-q0*q2
+        R[j,1,2] = q2*q3+q0*q1
+        R[j,2,2] = q0**2+q3**2-1./2
+    R *= 2.
+
+    return R
+
 @njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
 def spherical_proj(vec, proj=0, north=3):
     """
