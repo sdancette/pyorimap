@@ -1472,7 +1472,13 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
 
     Examples
     --------
-    >>> qa = q4_random(1000)
+    >>> vec = np.random.rand(1000,3).astype(DTYPEf)
+    >>> norm = np.sqrt(np.sum(vec**2, axis=1))
+    >>> vec /= norm[..., np.newaxis]
+    >>> xyproj0, albeta0, reverse0 = spherical_proj(vec, proj="stereo", north=3)
+    >>> xyproj1, albeta1, reverse1 = spherical_proj(vec, proj="equal-area", north=3)
+    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    True
     """
     pi2 = 2.*np.pi
     if north == 1:

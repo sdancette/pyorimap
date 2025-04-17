@@ -500,6 +500,93 @@ def q4_from_eul(eul):
 
     return qarr
 
+@njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
+def spherical_proj(vec, proj=0, north=3):
+    """
+    Performs stereographic or equal-area projection of vector `vec` in the equatorial plane.
+
+    Parameters
+    ----------
+    vec : ndarray
+        (ncrys, 3) array of unit vectors to be projected.
+    proj : int, default=0
+        type of projection, 0 for stereographic or 1 for equal-area.
+    north : int, default=3
+        North pole defining the projection plane.
+
+    Returns
+    -------
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the equatorial plane.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+    reverse : ndarray
+        boolean array indicating where the input unit vectors were pointing to the Southern hemisphere and reversed.
+
+    Examples
+    --------
+    >>> vec = np.random.rand(1000,3).astype(DTYPEf)
+    >>> norm = np.sqrt(np.sum(vec**2, axis=1))
+    >>> vec /= norm[..., np.newaxis]
+    >>> xyproj0a, albeta0a, reverse0a = q4np.spherical_proj(vec, proj="stereo", north=3)
+    >>> xyproj1a, albeta1a, reverse1a = q4np.spherical_proj(vec, proj="equal-area", north=3)
+    >>> xyproj0b, albeta0b, reverse0b = spherical_proj(vec, proj=0, north=3)
+    >>> xyproj1b, albeta1b, reverse1b = spherical_proj(vec, proj=1, north=3)
+    >>> np.allclose(xyproj0a, xyproj0b, atol=1e-4)
+    True
+    >>> np.allclose(xyproj1a, xyproj1b, atol=1e-4)
+    True
+    >>> np.allclose(albeta0a, albeta0b, atol=0.1)
+    True
+    """
+    sq2 = np.sqrt(2.)
+    pi2 = 2.*np.pi
+    if north == 1:
+        x1 = 1; x2 = 2; x3 = 0
+    elif north == 2:
+        x1 = 2; x2 = 0; x3 = 1
+    elif north == 3:
+        x1 = 0; x2 = 1; x3 = 2
+    else:
+        x1 = 0; x2 = 1; x3 = 2
+
+    ncrys = len(vec)
+    albeta = np.zeros((ncrys,2), dtype=DTYPEf)
+    xyproj = np.zeros((ncrys,2), dtype=DTYPEf)
+    reverse = np.zeros(ncrys, dtype=DTYPEi)
+
+    for j in prange(ncrys):
+        v = vec[j,:]
+        # check Northern hemisphere:
+        if  v[x3] < -_EPS:
+            v *= -1
+            reverse[j] = 1
+
+        # alpha:
+        v[x3] = min(v[x3], 1.)
+        v[x3] = max(v[x3],-1.)
+        albeta[j,0] = np.arccos(v[x3])
+        # beta:
+        if np.abs(albeta[j,0]) > _EPS:
+            tmp = v[x1]/np.sin(albeta[j,0])
+            tmp = min(tmp, 1.)
+            tmp = max(tmp,-1.)
+            albeta[j,1] = np.arccos(tmp)
+        if v[x2] < -_EPS:
+            albeta[j,1] *= -1
+        albeta[j,1] = albeta[j,1] % pi2
+
+        xyproj[j,0] = np.cos(albeta[j,1])
+        xyproj[j,1] = np.sin(albeta[j,1])
+        if proj == 0: # stereographic projection
+            Op = np.tan(albeta[j,0]/2.)
+        else:                # equal-area projection
+            Op = np.sin(albeta[j,0]/2.)*sq2
+        xyproj[j,:] *= Op
+        albeta[j,:] *= 360./pi2
+
+    return xyproj, albeta, reverse
+
 #@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mean_disori(qarr, qsym):
     """
