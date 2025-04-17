@@ -65,7 +65,7 @@ def q4_positive(qarr, _EPS=1e-7):
 
     Examples
     --------
-    >>> qarr = np.array([[-1,0,0,0], [0,-1,0,0], [0,0,-1,0], [0,0,0,-1]]).astype(np.float32)
+    >>> qarr = np.array([[-1,0,0,0], [0,-1,0,0], [0,0,-1,0], [0,0,0,-1]]).astype(DTYPEf)
     >>> qpos = q4_positive(qarr)
     >>> np.allclose(qpos, -qarr, atol=1e-6)
     True
@@ -88,7 +88,7 @@ def q4_positive(qarr, _EPS=1e-7):
 
     return np.squeeze(qpos)
 
-def q4_sym_cubic(static=True, dtype=np.float32):
+def q4_sym_cubic(static=True, dtype=DTYPEf):
     """
     Compute the (24, 4) quaternion array for cubic crystal symmetry.
 
@@ -104,7 +104,7 @@ def q4_sym_cubic(static=True, dtype=np.float32):
     >>> qsym = q4_sym_cubic()
     >>> qmtex = mtex.load_mtex_qsym(sym='cubic')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=0.1)
+    >>> np.allclose(ang, np.zeros(24, dtype=DTYPEf), atol=0.1)
     True
     """
     if static:
@@ -156,7 +156,7 @@ def q4_sym_cubic(static=True, dtype=np.float32):
 
     return qsym
 
-def q4_sym_hex(static=True, dtype=np.float32):
+def q4_sym_hex(static=True, dtype=DTYPEf):
     """
     Compute the (12, 4) quaternion array for hexagonal crystal symmetry.
 
@@ -172,7 +172,7 @@ def q4_sym_hex(static=True, dtype=np.float32):
     >>> qsym = q4_sym_hex()
     >>> qmtex = mtex.load_mtex_qsym(sym='hex')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(ang, np.zeros(12, dtype=np.float32), atol=0.1)
+    >>> np.allclose(ang, np.zeros(12, dtype=DTYPEf), atol=0.1)
     True
     """
     if static:
@@ -209,7 +209,7 @@ def q4_sym_hex(static=True, dtype=np.float32):
 
     return qsym
 
-def q4_sym_tetra(static=True, dtype=np.float32):
+def q4_sym_tetra(static=True, dtype=DTYPEf):
     """
     Compute the (8, 4) quaternion array for tetragonal crystal symmetry.
 
@@ -225,7 +225,7 @@ def q4_sym_tetra(static=True, dtype=np.float32):
     >>> qsym = q4_sym_tetra()
     >>> qmtex = mtex.load_mtex_qsym(sym='tetra')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(np.degrees(ang), np.zeros(8, dtype=np.float32), atol=0.1)
+    >>> np.allclose(np.degrees(ang), np.zeros(8, dtype=DTYPEf), atol=0.1)
     True
     """
     if static:
@@ -258,7 +258,7 @@ def q4_sym_tetra(static=True, dtype=np.float32):
 
     return qsym
 
-def q4_sym_ortho(static=True, dtype=np.float32):
+def q4_sym_ortho(static=True, dtype=DTYPEf):
     """
     Compute the (4, 4) quaternion array for orthorhombic crystal symmetry.
 
@@ -274,7 +274,7 @@ def q4_sym_ortho(static=True, dtype=np.float32):
     >>> qsym = q4_sym_ortho()
     >>> qmtex = mtex.load_mtex_qsym(sym='ortho')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(np.degrees(ang), np.zeros(4, dtype=np.float32), atol=0.1)
+    >>> np.allclose(np.degrees(ang), np.zeros(4, dtype=DTYPEf), atol=0.1)
     True
     """
     if static:
@@ -298,7 +298,7 @@ def q4_sym_ortho(static=True, dtype=np.float32):
 
     return qsym
 
-def q4_sym_mono(static=True, dtype=np.float32):
+def q4_sym_mono(static=True, dtype=DTYPEf):
     """
     Compute the (2, 4) quaternion array for monoclinic crystal symmetry.
 
@@ -314,7 +314,7 @@ def q4_sym_mono(static=True, dtype=np.float32):
     >>> qsym = q4_sym_mono()
     >>> qmtex = mtex.load_mtex_qsym(sym='mono')
     >>> ang = np.min(2*np.arccos(np.minimum(np.abs(np.dot(qsym,qmtex.T)),1.)), axis=0)
-    >>> np.allclose(np.degrees(ang), np.zeros(2, dtype=np.float32), atol=0.1)
+    >>> np.allclose(np.degrees(ang), np.zeros(2, dtype=DTYPEf), atol=0.1)
     True
     """
     if static:
@@ -334,7 +334,7 @@ def q4_sym_mono(static=True, dtype=np.float32):
 
     return qsym
 
-def q4_random(n=1024, dtype=np.float32):
+def q4_random(n=1024, dtype=DTYPEf):
     """
     Generate a (`n`, 4) unit quaternion array of random orientations.
 
@@ -357,7 +357,7 @@ def q4_random(n=1024, dtype=np.float32):
     --------
     >>> q = q4_random(1024)
     >>> norm = np.sqrt(np.sum(q**2, axis=1))
-    >>> np.allclose(norm, np.ones(1024, dtype=np.float32))
+    >>> np.allclose(norm, np.ones(1024, dtype=DTYPEf))
     True
     """
     rand = np.random.rand(n,3).astype(dtype)
@@ -379,7 +379,7 @@ def q4_random(n=1024, dtype=np.float32):
 
     return np.squeeze(q4)
 
-def q4_from_axis_angle(axis, ang, dtype=np.float32):
+def q4_from_axis_angle(axis, ang, dtype=DTYPEf):
     """
     Return the quaternion corresponding to `ang` degrees rotation about `axis`.
 
@@ -413,7 +413,7 @@ def q4_from_axis_angle(axis, ang, dtype=np.float32):
     Examples
     --------
     >>> q = q4_from_axis_angle([1,1,1], 0)
-    >>> np.allclose(q, np.array([1,0,0,0], dtype=np.float32))
+    >>> np.allclose(q, np.array([1,0,0,0], dtype=DTYPEf))
     True
     >>> q = q4_from_axis_angle([[1,0,0],[1,1,1]], 0)
     >>> q.shape
@@ -422,7 +422,7 @@ def q4_from_axis_angle(axis, ang, dtype=np.float32):
     >>> q.shape
     (5, 4)
     >>> norm = np.sqrt(np.sum(q**2, axis=1))
-    >>> np.allclose(norm, np.ones(5, dtype=np.float32))
+    >>> np.allclose(norm, np.ones(5, dtype=DTYPEf))
     True
    """
 
@@ -466,7 +466,7 @@ def q4_from_axis_angle(axis, ang, dtype=np.float32):
 
     return np.squeeze(qrot)
 
-def q4_mult(qa, qb, dtype=np.float32):
+def q4_mult(qa, qb, dtype=DTYPEf):
     """
     Array-based quaternion multiplication.
 
@@ -524,7 +524,7 @@ def q4_mult(qa, qb, dtype=np.float32):
 
     return qc
 
-def q4_inv(qarr, dtype=np.float32):
+def q4_inv(qarr, dtype=DTYPEf):
     """
     Inverse of unit quaternion based on its conjugate.
 
@@ -541,9 +541,9 @@ def q4_inv(qarr, dtype=np.float32):
 
     Examples
     --------
-    >>> qa = np.array([0,1,0,0], dtype=np.float32)
+    >>> qa = np.array([0,1,0,0], dtype=DTYPEf)
     >>> qinv = q4_inv(qa)
-    >>> np.allclose(qinv, np.array([0,-1,0,0], dtype=np.float32))
+    >>> np.allclose(qinv, np.array([0,-1,0,0], dtype=DTYPEf))
     True
     >>> qa = q4_random(n=1024)
     >>> qinv = q4_inv(qa)
@@ -556,7 +556,7 @@ def q4_inv(qarr, dtype=np.float32):
 
     return qinv
 
-def q4_from_eul(eul, dtype=np.float32):
+def q4_from_eul(eul, dtype=DTYPEf):
     """
     Converts Bunge Euler angles (in degrees) to quaternions.
 
@@ -617,7 +617,7 @@ def q4_from_eul(eul, dtype=np.float32):
 
     return np.squeeze(qarr)
 
-def q4_to_eul(qarr, dtype=np.float32):
+def q4_to_eul(qarr, dtype=DTYPEf):
     """
     Converts quaternions to Bunge Euler angles in degrees.
 
@@ -642,7 +642,7 @@ def q4_to_eul(qarr, dtype=np.float32):
 
     Examples
     --------
-    >>> eul = np.random.rand(1024,3).astype(np.float32)
+    >>> eul = np.random.rand(1024,3).astype(DTYPEf)
     >>> eul[:,0] *= 360.; eul[:,1] *= 180.; eul[:,2] *= 360.
     >>> qarr = q4_from_eul(eul)
     >>> eulback = q4_to_eul(qarr)
@@ -686,7 +686,7 @@ def q4_to_eul(qarr, dtype=np.float32):
 
     return np.squeeze(eul)
 
-def mat_from_eul(eul, dtype=np.float32):
+def mat_from_eul(eul, dtype=DTYPEf):
     """
     Compute rotation matrix from Bunge Euler angles.
 
@@ -748,7 +748,7 @@ def mat_from_eul(eul, dtype=np.float32):
 
     return np.squeeze(R)
 
-def mat_to_eul(R, dtype=np.float32):
+def mat_to_eul(R, dtype=DTYPEf):
     """
     Compute Bunge Euler angles from rotation matrix.
 
@@ -796,7 +796,7 @@ def mat_to_eul(R, dtype=np.float32):
 
     return np.squeeze(eul)
 
-def q4_from_mat(R, dtype=np.float32):
+def q4_from_mat(R, dtype=DTYPEf):
     """
     Compute crystal quaternion from rotation matrix.
 
@@ -824,7 +824,7 @@ def q4_from_mat(R, dtype=np.float32):
     qarr = q4_from_eul( mat_to_eul(R) )
     return qarr
 
-def q4_to_mat(qarr, dtype=np.float32):
+def q4_to_mat(qarr, dtype=DTYPEf):
     """
     Compute rotation matrix from crystal quaternion.
 
@@ -907,7 +907,7 @@ def transpose_mat(R):
 
     return Rt
 
-def q4_angle(qa, qb, dtype=np.float32):
+def q4_angle(qa, qb, dtype=DTYPEf):
     """
     Returns the angle (degrees) between quaternions `qa` and `qb`.
 
@@ -926,7 +926,7 @@ def q4_angle(qa, qb, dtype=np.float32):
     ang = np.arccos(q4_cosang2(qa, qb))*2*180/np.pi
     return ang
 
-def q4_cosang2(qa, qb, dtype=np.float32):
+def q4_cosang2(qa, qb, dtype=DTYPEf):
     """
     Returns the cosine of the half angle between quaternions `qa` and `qb`.
 
@@ -966,7 +966,7 @@ def q4_cosang2(qa, qb, dtype=np.float32):
                             qa[...,3]*qb[...,3]), 1.)
     return ang
 
-def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32):
+def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=DTYPEf):
     """
     Disorientation angle (degrees) between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -1002,7 +1002,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32
     >>> qsym = q4_sym_cubic()
     >>> qequ = q4_mult(qa, qsym)
     >>> ang = q4_disori_angle(qequ, qequ[::-1,:], qsym)
-    >>> np.allclose(ang, np.zeros(24, dtype=np.float32), atol=0.1)
+    >>> np.allclose(ang, np.zeros(24, dtype=DTYPEf), atol=0.1)
     True
     >>> qa = q4_random(1024)
     >>> qb = q4_random(1024)
@@ -1048,7 +1048,7 @@ def q4_disori_angle(qa, qb, qsym, method=1, return_index=False, dtype=np.float32
     else:
         return np.degrees(2*np.arccos(ang))
 
-def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtype=np.float32):
+def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtype=DTYPEf):
     """
     Disorientation quaternion between `qa` and `qb`, taking `qsym` symmetries into account.
 
@@ -1077,7 +1077,7 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
 
     Examples
     --------
-    >>> qa = np.array([1,0,0,0], dtype=np.float32)
+    >>> qa = np.array([1,0,0,0], dtype=DTYPEf)
     >>> qsym = q4_sym_cubic(); isym = 5
     >>> qb = q4_mult(qa, qsym[isym])
     >>> qdis_ref = q4_disori_quat(qa, qb, qsym, frame='ref')
@@ -1141,7 +1141,7 @@ def q4_disori_quat(qa, qb, qsym, frame='ref', method=1, return_index=False, dtyp
     else:
         return qdis
 
-def q4_to_FZ(qarr, qsym, return_index=False, dtype=np.float32):
+def q4_to_FZ(qarr, qsym, return_index=False, dtype=DTYPEf):
     """
     Move quaternions to Fundamental Zone based on crystal symmetries.
 
@@ -1190,7 +1190,7 @@ def q4_to_FZ(qarr, qsym, return_index=False, dtype=np.float32):
     else:
         return q4_positive(qFZ)
 
-def q4_mean_disori(qarr, qsym):
+def q4_mean_disori(qarr, qsym, dtype=DTYPEf):
     """
     Average orientation and disorientation (GOS and GROD).
 
@@ -1225,9 +1225,10 @@ def q4_mean_disori(qarr, qsym):
     """
 
     ii = 0
-    theta= 999.
+    theta = 999.
+    mxtheta = 0.2
     nitermax = 10
-    theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
+    theta_iter = np.zeros(nitermax, dtype=dtype) - 1.
 
     # initialize avg orientation:
     #qref = qarr[0,:]
@@ -1238,16 +1239,16 @@ def q4_mean_disori(qarr, qsym):
                                 qmed[0,3]*qarr[:,3]), 1.)
     imed = np.argmax(cosang)
     qref = qarr[imed,:]
-    while (theta > 0.2) and (ii < nitermax):
+    while (theta > mxtheta) and (ii < nitermax):
         # disorientation of each crystal wrt average orientation:
         qdis = q4_disori_quat(qref, qarr, qsym, frame='crys_a', method=1)
 
         #qtmp = np.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
         #qtmp /= np.sqrt(np.einsum('...i,...i', qtmp, qtmp))
         #qtmp /= np.sqrt(np.sum(qtmp**2)) # slower ?
-        qtmp = np.sum(qdis, axis=0, dtype=np.float64)
+        qtmp = np.mean(qdis, axis=0, dtype=np.float64)
         qtmp /= np.sqrt(qtmp[0]**2 + qtmp[1]**2 + qtmp[2]**2 + qtmp[3]**2)
-        qtmp = qtmp.astype(DTYPEf)
+        qtmp = qtmp.astype(dtype)
 
         # q_mean=q_ref*q_sum/|q_sum|
         qavg = q4_mult(qref, qtmp)
@@ -1277,9 +1278,9 @@ def q4_mean_disori(qarr, qsym):
     #logging.info("Computed average grain orientation over {} crystals in {} iterations.".format(len(qarr), ii))
     #logging.info("Theta convergence (degrees): {}".format(theta_iter))
 
-    return qavg, GROD, GROD_stat, theta_iter
+    return qavg, GROD, np.array(GROD_stat), theta_iter
 
-def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
+def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback, dtype=DTYPEf):
     """
     Average orientation and disorientation (multigrain).
 
@@ -1324,18 +1325,19 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     """
 
     ii = 0
-    nitermax = 10
-    theta_iter = np.zeros(nitermax, dtype=DTYPEf) - 1.
+    mxtheta = 0.2
+    nitermax = 3
+    theta_iter = np.zeros(nitermax, dtype=dtype) - 1.
 
     grains = unigrain[iback]
 
     #unic, iunic, iback, counts = np.unique(grains, return_index=True, return_inverse=True, return_counts=True)
-    theta_unic = np.zeros(len(unigrain), dtype=DTYPEf) + 999.
+    theta_unic = np.zeros(len(unigrain), dtype=dtype) + 999.
     theta = theta_unic[iback]
     qdis = np.zeros_like(qarr)
 
     # update iunic to account for the median quaternion in each grain, instead of the first, to initialize the average loop:
-    qmed = np.zeros((len(unigrain), 4), dtype=DTYPEf)
+    qmed = np.zeros((len(unigrain), 4), dtype=dtype)
     qmed[:,0] = ndi.median(qarr[:,0], grains, index=unigrain)
     qmed[:,1] = ndi.median(qarr[:,1], grains, index=unigrain)
     qmed[:,2] = ndi.median(qarr[:,2], grains, index=unigrain)
@@ -1348,22 +1350,23 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     qref_unic = qarr[np.atleast_1d(imed)]
     #qref_unic = qarr[iunic]
 
-    while (theta_unic.max() > 0.2) and (ii < nitermax):
+    while (theta_unic.max() > mxtheta) and (ii < nitermax):
         qref_tot = qref_unic[iback]
 
         # disorientation of each crystal wrt average orientation:
-        whrT = (theta > 0.2)
+        whrT = (theta > mxtheta)
         qdis[whrT] = q4_disori_quat(qref_tot[whrT], qarr[whrT], qsym, frame='crys_a', method=1, return_index=False)
+        #qdis = q4_disori_quat(qref_tot, qarr, qsym, frame='crys_a', method=1, return_index=False)
 
         qdis_unic = np.zeros(qref_unic.shape, dtype=np.float64)
-        qdis_unic[:,0] = ndi.sum_labels(qdis[:,0], grains, index=unigrain) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
-        qdis_unic[:,1] = ndi.sum_labels(qdis[:,1], grains, index=unigrain)
-        qdis_unic[:,2] = ndi.sum_labels(qdis[:,2], grains, index=unigrain)
-        qdis_unic[:,3] = ndi.sum_labels(qdis[:,3], grains, index=unigrain)
+        qdis_unic[:,0] = ndi.mean(qdis[:,0], grains, index=unigrain) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
+        qdis_unic[:,1] = ndi.mean(qdis[:,1], grains, index=unigrain)
+        qdis_unic[:,2] = ndi.mean(qdis[:,2], grains, index=unigrain)
+        qdis_unic[:,3] = ndi.mean(qdis[:,3], grains, index=unigrain)
 
         norm = np.sqrt(np.einsum('...i,...i', qdis_unic, qdis_unic))
         qdis_unic /= norm[..., np.newaxis]
-        qdis_unic = qdis_unic.astype(np.float32)
+        qdis_unic = qdis_unic.astype(dtype)
 
         # q_mean=q_ref*q_sum/|q_sum|
         qavg_unic = q4_mult(qref_unic, qdis_unic)
@@ -1389,7 +1392,7 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
 
     return qavg_unic, GOS_unic, theta_unic, GROD, theta_iter
 
-def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
+def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=DTYPEf):
     """
     Generate an orientation spread.
 
@@ -1445,7 +1448,7 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=np.float32):
 
     return qarr
 
-def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
+def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     """
     Performs stereographic or equal-area projection of vector `vec` in the equatorial plane.
 
@@ -1513,7 +1516,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=np.float32):
 
     return xyproj, np.degrees(albeta), reverse
 
-def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, dtype=np.float32):
+def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, dtype=DTYPEf):
     """
     Inverse Pole Figure projection based on crystal symmetries.
 
@@ -1592,19 +1595,19 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
     RGB = np.zeros((ncrys,3), dtype=dtype)
     if sym == 'cubic':
         alpha_max = np.degrees( np.arccos( np.sqrt(1./(2. + np.tan(albeta[:,1]*deg2rad)**2)) ) )
-        beta_max = np.ones(ncrys, dtype=DTYPEf)*45.
+        beta_max = np.ones(ncrys, dtype=dtype)*45.
     elif sym == 'hex':
-        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
-        beta_max = np.ones(ncrys, dtype=DTYPEf)*30.
+        alpha_max = np.ones(ncrys, dtype=dtype)*90.
+        beta_max = np.ones(ncrys, dtype=dtype)*30.
     elif sym == 'tetra':
-        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
-        beta_max = np.ones(ncrys, dtype=DTYPEf)*45.
+        alpha_max = np.ones(ncrys, dtype=dtype)*90.
+        beta_max = np.ones(ncrys, dtype=dtype)*45.
     elif sym == 'ortho':
-        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
-        beta_max = np.ones(ncrys, dtype=DTYPEf)*90.
+        alpha_max = np.ones(ncrys, dtype=dtype)*90.
+        beta_max = np.ones(ncrys, dtype=dtype)*90.
     elif sym == 'mono':
-        alpha_max = np.ones(ncrys, dtype=DTYPEf)*90.
-        beta_max = np.ones(ncrys, dtype=DTYPEf)*180.
+        alpha_max = np.ones(ncrys, dtype=dtype)*90.
+        beta_max = np.ones(ncrys, dtype=dtype)*180.
     else:
         logging.error("Z!! unproper symmetry {} for IPF RGB".format(sym))
     RGB[:,0] =  1. - albeta[:,0]/alpha_max
@@ -1618,7 +1621,7 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
 
     return xyproj, RGB, albeta, isym
 
-#def XXXq4_from_mat(R, dtype=np.float32):
+#def XXXq4_from_mat(R, dtype=DTYPEf):
 #    """
 #    Converts rotation matrices to quaternions.
 #    Z!! ... not correct at this point ...

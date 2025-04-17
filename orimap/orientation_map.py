@@ -287,7 +287,8 @@ class OriMap(pv.ImageData):
         Cell neighborhood is defined by a structuring element
         with the input `radius` and `connectivity` as defined in self.params.selem.
         """
-        self._move_to_FZ_by_phase()
+
+        #self._move_to_FZ_by_phase()
         self._get_neighborhood()
 
         logging.info("Grain cluster method: {}.".format(self.params.grain_cluster_method))
@@ -460,7 +461,12 @@ class OriMap(pv.ImageData):
         try:
             ncrys = len(self.qarray)
         except AttributeError:
-            self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+            logging.info("... Starting to generate quaternion array from Euler angles.")
+            if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
+                self.qarray = q4nCPU.q4_from_eul(self.cell_data['eul'])
+            else:
+                self.qarray = q4np.q4_from_eul(self.cell_data['eul'])
+            logging.info("... Finished to generate quaternion array from Euler angles.")
 
         if (self.params.compute_mode == 'cupy') or (self.params.compute_mode == 'numba_gpu'):
             qarr_gpu = cp.asarray(self.qarray)

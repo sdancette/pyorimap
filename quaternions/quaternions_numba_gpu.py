@@ -409,6 +409,7 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
 
     ii = 0
     theta= 999.
+    mxtheta = 0.2
     nitermax = 10
     theta_iter -= 1.
     ncrys = qarr.shape[0]
@@ -427,7 +428,7 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
     imed = cp.argmax(GROD)
     qref = qarr[imed:imed+1,:]
 
-    while (theta > 0.2) and (ii < nitermax):
+    while (theta > mxtheta) and (ii < nitermax):
         # disorientation of each crystal wrt average orientation:
         qdis *= 0.
         #print(qref)
@@ -437,7 +438,7 @@ def q4_mean_disori(qarr, qsym, qavg, GROD, GROD_stat, theta_iter):
         #qtmp = cp.sum(qdis, axis=0) # careful with np.float32 sum of very big arrays with more than 16*1024**2 quaternions
         #qtmp /= cp.sqrt(cp.einsum('...i,...i', qtmp, qtmp))
         #qtmp /= cp.sqrt(cp.sum(qtmp**2)) # slower ?
-        qtmp = cp.sum(qdis, axis=0, dtype=cp.float64)
+        qtmp = cp.mean(qdis, axis=0, dtype=cp.float64)
         qtmp /= cp.sqrt(qtmp[0]**2 + qtmp[1]**2 + qtmp[2]**2 + qtmp[3]**2)
         qtmp = qtmp.astype(cp.float32)
 
@@ -517,7 +518,8 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     """
 
     ii = 0
-    nitermax = 10
+    mxtheta = 0.2
+    nitermax = 3
     theta_iter = cp.zeros(nitermax, dtype=DTYPEf) - 1.
 
     grains = unigrain[iback]
@@ -545,7 +547,7 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
     qref_unic = qarr[imed]
     #qref_unic = qarr[iunic]
 
-    while (theta_unic.max() > 0.2) and (ii < nitermax):
+    while (theta_unic.max() > mxtheta) and (ii < nitermax):
         qdis = qref_unic[iback] # temporarily stores reference orientation before update
 
         # disorientation of each crystal wrt average orientation:
@@ -555,10 +557,10 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
         cp.minimum(cp.abs(qdis[:,0]), 1., out=GROD)
 
         qdis_unic *= 0.
-        qdis_unic[:,0] = ndix.sum_labels(qdis[:,0], grains, index=unigrain) # sum_labels takes care of float64 precision for big arrays with more than 16*1024**2 quaternions
-        qdis_unic[:,1] = ndix.sum_labels(qdis[:,1], grains, index=unigrain)
-        qdis_unic[:,2] = ndix.sum_labels(qdis[:,2], grains, index=unigrain)
-        qdis_unic[:,3] = ndix.sum_labels(qdis[:,3], grains, index=unigrain)
+        qdis_unic[:,0] = ndix.mean(qdis[:,0], grains, index=unigrain) # sum_labels takes care of float64 precision for big arrays with more than 16*1024**2 quaternions
+        qdis_unic[:,1] = ndix.mean(qdis[:,1], grains, index=unigrain)
+        qdis_unic[:,2] = ndix.mean(qdis[:,2], grains, index=unigrain)
+        qdis_unic[:,3] = ndix.mean(qdis[:,3], grains, index=unigrain)
 
         norm = cp.sqrt(cp.einsum('...i,...i', qdis_unic, qdis_unic))
         qdis_unic /= norm[..., cp.newaxis]
