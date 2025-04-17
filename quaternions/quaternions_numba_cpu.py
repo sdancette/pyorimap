@@ -25,6 +25,12 @@ DTYPEf = np.float32
 DTYPEi = np.int32
 _EPS = 1e-7
 
+qsymCubic = q4np.q4_sym_cubic()
+qsymHex =   q4np.q4_sym_hex()
+qsymTetra = q4np.q4_sym_tetra()
+qsymOrtho = q4np.q4_sym_ortho()
+qsymMono =  q4np.q4_sym_mono()
+
 @njit(float32[:,:](float32[:,:], float32), fastmath=True, parallel=True)
 def q4_positive(qarr, _EPS=1e-7):
     """
@@ -556,6 +562,52 @@ def q4_to_mat(qarr):
 
     return R
 
+@njit(float32[:,:](float32[:,:,:], float32[:,:]), fastmath=True, parallel=True)
+def matvec_mult(A, b):
+    """
+    Matrix-vector multiplication using numba on CPU.
+
+    Parameters
+    ----------
+    A : ndarray
+        (ncrys, n, n) array of matrices.
+    b : ndarray
+        (ncrys, n) array of matrices.
+
+    Returns
+    -------
+    C : ndarray
+        (ncrys, n) array, result of the matrix multiplication `A`*`b`.
+
+    Examples
+    --------
+    >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
+    >>> b = np.random.rand(3).astype(DTYPEf)
+    >>> C1 = np.dot(A,b)
+    >>> C2 = matvec_mult(A, np.atleast_2d(b))
+    >>> np.allclose(C1, C2, atol=1e-6)
+    True
+    """
+
+    ncrysA, mA, nA = A.shape
+    ncrysB, nB = b.shape
+
+    if (nA == nB) & (mA == nA):
+        if ncrysA == ncrysB:
+            C = np.zeros((ncrysA,nB), dtype=DTYPEf)
+            for icrys in prange(ncrysA):
+                for i in range(mA):
+                    for j in range(nA):
+                        C[icrys,i] += A[icrys,i,j]*b[icrys,j]
+        elif ncrysB == 1:
+            C = np.zeros((ncrysA,nB), dtype=DTYPEf)
+            for icrys in prange(ncrysA):
+                for i in range(mA):
+                    for j in range(nA):
+                        C[icrys,i] += A[icrys,i,j]*b[0,j]
+
+    return C
+
 @njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
 def spherical_proj(vec, proj=0, north=3):
     """
@@ -581,7 +633,7 @@ def spherical_proj(vec, proj=0, north=3):
 
     Examples
     --------
-    >>> vec = np.random.rand(1000,3).astype(DTYPEf)
+    >>> vec = np.random.rand(1024,3).astype(DTYPEf)
     >>> norm = np.sqrt(np.sum(vec**2, axis=1))
     >>> vec /= norm[..., np.newaxis]
     >>> xyproj0a, albeta0a, reverse0a = q4np.spherical_proj(vec, proj="stereo", north=3)
@@ -642,6 +694,143 @@ def spherical_proj(vec, proj=0, north=3):
         albeta[j,:] *= 360./pi2
 
     return xyproj, albeta, reverse
+
+@njit(Tuple((float32[:,:], float32[:,:], float32[:,:], int32[:]))(float32[:,:], float32[:], float32[:,:], int32, int32), fastmath=True, parallel=True)
+def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
+    """
+    Inverse Pole Figure projection based on crystal symmetries.
+
+    Parameters
+    ----------
+    qarr : ndarray
+        (ncrys, 4) array of quaternions.
+    axis : array_like
+        sample vector (in the reference frame) to be projected in the crystal IPF triangle.
+    qsym : ndarray
+        quaternion array of symmetry operations.
+    proj : int, default=0
+        type of projection, 0 for stereographic or 1 for equal-area.
+    north : int, default=3
+        North pole defining the projection plane.
+
+    Returns
+    -------
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the standard triangle.
+    RGB : ndarray
+        (ncrys, 3) array of RGB color code for the projection.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+    isym : ndarray
+        index of the ith equivalent orientation corresponding to the standard triangle.
+
+    Examples
+    --------
+    >>> qarr = q4np.q4_random(1024)
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> axis = np.array([1,0,0], dtype=DTYPEf)
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=0, north=3)
+    >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
+    True
+    >>> np.allclose(RGB0, RGB1, atol=0.0025)
+    True
+    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    True
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="equal-area", north=3)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=1, north=3)
+    >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
+    True
+    >>> np.allclose(RGB0, RGB1, atol=0.0025)
+    True
+    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    True
+    """
+    deg2rad = np.pi/180.
+    norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
+    axis /= norm
+    bxis = np.zeros((1,3), dtype=DTYPEf)
+    bxis[0,:] = axis
+    ncrys = len(qarr)
+    nsym = len(qsym)
+    if nsym == 24:
+        sym = 'cubic' if np.allclose(qsym, qsymCubic, atol=1e-6) else 'NA'
+    elif nsym == 12:
+        sym = 'hex'   if np.allclose(qsym, qsymHex, atol=1e-6) else 'NA'
+    elif nsym == 8:
+        sym = 'tetra' if np.allclose(qsym, qsymTetra, atol=1e-6) else 'NA'
+    elif nsym == 4:
+        sym = 'ortho' if np.allclose(qsym, qsymOrtho, atol=1e-6) else 'NA'
+    elif nsym == 2:
+        sym = 'mono'  if np.allclose(qsym, qsymMono, atol=1e-6) else 'NA'
+    else:
+        sym = 'unknown'
+
+    albeta = np.zeros((ncrys,2), dtype=DTYPEf)+360
+    xyproj = np.zeros((ncrys,2), dtype=DTYPEf)
+    isym   = np.zeros(ncrys, dtype=DTYPEi)
+
+    for iq, q in enumerate(qsym):
+        qequ = q4_mult(qarr, qsym[iq:iq+1])
+        Rsa2cr = q4_to_mat(qequ)
+        #vec = np.dot(Rsa2cr, axis)
+        vec = matvec_mult(Rsa2cr, bxis)
+
+        xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north)
+        for j in prange(ncrys):
+            update = False
+            if sym == 'cubic':
+                if (albeta1[j,1] < 45.+_EPS) & (albeta1[j,0] < albeta[j,0] +_EPS):
+                    update = True
+            elif sym == 'hex':
+                if (albeta1[j,1] < 30.+_EPS):
+                    update = True
+            elif sym == 'tetra':
+                if (albeta1[j,1] < 45.+_EPS):
+                    update = True
+            elif sym == 'ortho':
+                if (albeta1[j,1] < 90.+_EPS):
+                    update = True
+            elif sym == 'mono':
+                if (albeta1[j,1] < 180.+_EPS):
+                    update = True
+            else:
+                if (albeta1[j,1] > -_EPS):
+                    update = True
+
+            if update:
+                xyproj[j,:] = xyproj1[j,:]
+                albeta[j,:] = albeta1[j,:]
+                isym[j] = iq
+
+    RGB = np.zeros((ncrys,3), dtype=DTYPEf)
+    for j in prange(ncrys):
+        if sym == 'cubic':
+            alpha_max = np.arccos(np.sqrt(1./(2.+np.tan(albeta[j,1]*deg2rad)**2)))/deg2rad
+            beta_max = 45.
+        elif sym == 'hex':
+            alpha_max = 90.
+            beta_max = 30.
+        elif sym == 'tetra':
+            alpha_max = 90.
+            beta_max = 45.
+        elif sym == 'ortho':
+            alpha_max = 90.
+            beta_max = 90.
+        elif sym == 'mono':
+            alpha_max = 90.
+            beta_max = 180.
+        else:
+            alpha_max = 90.
+            beta_max = 360.
+
+        RGB[j,0] =  1. - albeta[j,0]/alpha_max
+        RGB[j,1] = (1. - albeta[j,1]/beta_max) * albeta[j,0]/alpha_max
+        RGB[j,2] = (albeta[j,1]/beta_max)      * albeta[j,0]/alpha_max
+        mx = RGB[j,:].max()
+        RGB[j,:] /= mx
+
+    return xyproj, RGB, albeta, isym
 
 #@njit(Tuple((float32[:], float32[:], float32[:], float32[:]))(float32[:,:], float32[:,:]), fastmath=True, parallel=True)
 def q4_mean_disori(qarr, qsym):

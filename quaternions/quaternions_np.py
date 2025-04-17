@@ -1472,7 +1472,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
 
     Examples
     --------
-    >>> vec = np.random.rand(1000,3).astype(DTYPEf)
+    >>> vec = np.random.rand(1024,3).astype(DTYPEf)
     >>> norm = np.sqrt(np.sum(vec**2, axis=1))
     >>> vec /= norm[..., np.newaxis]
     >>> xyproj0, albeta0, reverse0 = spherical_proj(vec, proj="stereo", north=3)
@@ -1552,7 +1552,10 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
 
     Examples
     --------
-    >>> qa = q4_random(1000)
+    >>> qarr = q4_random(1024)
+    >>> qsym = q4_sym_cubic()
+    >>> axis = np.array([1,0,0], dtype=DTYPEf)
+    >>> xyproj, RGB, albeta, isym = q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3)
     """
     deg2rad = np.pi/180.
     norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )

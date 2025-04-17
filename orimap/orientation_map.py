@@ -270,13 +270,20 @@ class OriMap(pv.ImageData):
 
             for iax, axis in enumerate(sampleAx):
                 logging.info("... ... axis {}.".format(iax))
-                xyproj, RGB, albeta, isym = q4np.q4_to_IPF(qarr, axis=axis, qsym=qsym, proj=proj, north=3)
+                if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
+                    iproj = 0 if proj == 'stereo' else 1
+                    xyproj, RGB, albeta, isym = q4nCPU.q4_to_IPF(qarr, axis, qsym, proj=iproj, north=3)
+                else:
+                    xyproj, RGB, albeta, isym = q4np.q4_to_IPF(qarr, axis=axis, qsym=qsym, proj=proj, north=3)
+
                 if iax == 0:
                     self.cell_data['IPFx'][whrPhi] = RGB
                 elif iax == 1:
                     self.cell_data['IPFy'][whrPhi] = RGB
                 elif iax == 2:
                     self.cell_data['IPFz'][whrPhi] = RGB
+
+        logging.info("Finished to compute IPF projection.")
 
         self.save(self.params.filename[:-4]+'.vtk')
 
