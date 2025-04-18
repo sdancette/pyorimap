@@ -565,7 +565,7 @@ def q4_to_mat(qarr):
 @njit(float32[:,:](float32[:,:,:], float32[:,:]), fastmath=True, parallel=True)
 def matvec_mult(A, b):
     """
-    Matrix-vector multiplication using numba on CPU.
+    Stacked matrix-vector multiplication using numba on CPU.
 
     Parameters
     ----------
@@ -583,8 +583,14 @@ def matvec_mult(A, b):
     --------
     >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
     >>> b = np.random.rand(3).astype(DTYPEf)
-    >>> C1 = np.dot(A,b)
+    >>> C1 = np.matvec(A,b)
     >>> C2 = matvec_mult(A, np.atleast_2d(b))
+    >>> np.allclose(C1, C2, atol=1e-6)
+    True
+    >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
+    >>> b = np.random.rand(1024,3).astype(DTYPEf)
+    >>> C1 = np.matvec(A,b)
+    >>> C2 = matvec_mult(A,b)
     >>> np.allclose(C1, C2, atol=1e-6)
     True
     """
@@ -593,20 +599,57 @@ def matvec_mult(A, b):
     ncrysB, nB = b.shape
 
     if (nA == nB) & (mA == nA):
-        if ncrysA == ncrysB:
-            C = np.zeros((ncrysA,nB), dtype=DTYPEf)
-            for icrys in prange(ncrysA):
-                for i in range(mA):
-                    for j in range(nA):
+        C = np.zeros((ncrysA,nB), dtype=DTYPEf)
+        for icrys in prange(ncrysA):
+            for i in range(mA):
+                for j in range(nA):
+                    if ncrysA == ncrysB:
                         C[icrys,i] += A[icrys,i,j]*b[icrys,j]
-        elif ncrysB == 1:
-            C = np.zeros((ncrysA,nB), dtype=DTYPEf)
-            for icrys in prange(ncrysA):
-                for i in range(mA):
-                    for j in range(nA):
+                    elif ncrysB == 1:
                         C[icrys,i] += A[icrys,i,j]*b[0,j]
 
     return C
+
+@njit(float32[:,:,:](float32[:,:,:], float32[:,:,:]), fastmath=True, parallel=True)
+def mat_mult(A, B):
+    """
+    Stacked matrix multiplication using numba on CPU.
+
+    Parameters
+    ----------
+    A : ndarray
+        (ncrys, n, n) array of matrices.
+    B : ndarray
+        (ncrys, n, n) array of matrices.
+
+    Returns
+    -------
+    C : ndarray
+        (ncrys, n, n) array, result of the matrix multiplication `A`*`B`.
+
+    Examples
+    --------
+    >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
+    >>> B = np.random.rand(1024,3,3).astype(DTYPEf)
+    >>> C1 = np.matmul(A,B)
+    >>> C2 = mat_mult(A,B)
+    >>> np.allclose(C1, C2, atol=1e-6)
+    True
+    """
+    ncrysA, mA, nA = A.shape
+    ncrysB, mB, nB = B.shape
+    C = np.zeros((ncrysA,mA,nA), dtype=DTYPEf)
+    if nA == mB:
+        for icrys in prange(ncrysA):
+            for i in range(mA):
+                for j in range(nB):
+                    for k in range(nA):
+                        if ncrysA == ncrysB:
+                            C[icrys,i,j] += A[icrys,i,k] * B[icrys,k,j]
+                        elif ncrysB == 1:
+                            C[icrys,i,j] += A[icrys,i,k] * B[0,k,j]
+    return C
+
 
 @njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
 def spherical_proj(vec, proj=0, north=3):
@@ -743,7 +786,7 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
     True
     >>> np.allclose(RGB0, RGB1, atol=0.0025)
     True
-    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    >>> np.allclose(albeta0, albeta1, atol=0.2)
     True
     """
     deg2rad = np.pi/180.

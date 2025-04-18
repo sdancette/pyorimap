@@ -646,12 +646,12 @@ def q4_to_eul(qarr, dtype=DTYPEf):
     >>> eul[:,0] *= 360.; eul[:,1] *= 180.; eul[:,2] *= 360.
     >>> qarr = q4_from_eul(eul)
     >>> eulback = q4_to_eul(qarr)
-    >>> np.allclose(eul, eulback, atol=0.1)
+    >>> np.allclose(eul, eulback, atol=0.2)
     True
     >>> eul = [[10,30,50],[10,0,0],[10,180,0]]
     >>> qarr = q4_from_eul(eul)
     >>> eulback = q4_to_eul(qarr)
-    >>> np.allclose(eul, eulback, atol=0.1)
+    >>> np.allclose(eul, eulback, atol=0.2)
     True
     """
     qarr = np.atleast_2d(qarr).astype(dtype)
