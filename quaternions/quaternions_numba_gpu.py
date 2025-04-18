@@ -19,12 +19,14 @@ import cupy as cp
 import cupyx.scipy.ndimage as ndix
 from pyorimap.quaternions import quaternions_np as q4np
 
-from numba import cuda, int32, float32
+from numba import cuda, uint8, int32, float32, boolean
 from numba.types import Tuple
 
 DTYPEf = np.float32
 DTYPEi = np.int32
 _EPS = 1e-7
+sq2 = np.sqrt(2.)
+pi2 = 2.*np.pi
 
 mempool = cp.get_default_memory_pool()
 pinned_mempool = cp.get_default_pinned_memory_pool()
@@ -64,9 +66,128 @@ def _device_q4_inv(qa, qb):
     qb[2] = -qa[2]
     qb[3] = -qa[3]
 
+@cuda.jit((float32[:], float32[:,:]), fastmath=True, device=True)
+def _device_q4_to_mat(q, R):
+    q0 = q[0]; q1 = q[1]; q2 = q[2]; q3 = q[3]
+    R[0,0] = 2.*(q0**2+q1**2-1./2)
+    R[1,0] = 2.*(q1*q2-q0*q3)
+    R[2,0] = 2.*(q1*q3+q0*q2)
+    R[0,1] = 2.*(q1*q2+q0*q3)
+    R[1,1] = 2.*(q0**2+q2**2-1./2)
+    R[2,1] = 2.*(q2*q3-q0*q1)
+    R[0,2] = 2.*(q1*q3-q0*q2)
+    R[1,2] = 2.*(q2*q3+q0*q1)
+    R[2,2] = 2.*(q0**2+q3**2-1./2)
+
+@cuda.jit((float32[:,:], float32[:], float32[:]), fastmath=True, device=True)
+def _device_matvec_mult(A,b,c):
+    c[0] = A[0,0]*b[0] + A[0,1]*b[1] + A[0,2]*b[2]
+    c[1] = A[1,0]*b[0] + A[1,1]*b[1] + A[1,2]*b[2]
+    c[2] = A[2,0]*b[0] + A[2,1]*b[1] + A[2,2]*b[2]
+    #m, n = A.shape
+    #for i in range(m):
+    #    for j in range(n):
+    #        c[i] += A[i,j]*b[j]
+
 @cuda.jit(float32(float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_cosang2(qa, qb):
     return( min(abs(qa[0]*qb[0] + qa[1]*qb[1] + qa[2]*qb[2] + qa[3]*qb[3]), 1.) )
+
+@cuda.jit((float32[:], int32, int32, float32[:], float32[:], boolean), fastmath=True, device=True)
+def _device_spherical_proj(vec, proj, north, xyproj, albeta, reverse):
+    if north == 1:
+        x1 = 1; x2 = 2; x3 = 0
+    elif north == 2:
+        x1 = 2; x2 = 0; x3 = 1
+    elif north == 3:
+        x1 = 0; x2 = 1; x3 = 2
+    else:
+        x1 = 0; x2 = 1; x3 = 2
+
+    reverse = False
+    # check Northern hemisphere:
+    if  vec[x3] < -_EPS:
+        reverse = True
+        vec[x1] *= -1.
+        vec[x2] *= -1.
+        vec[x3] *= -1.
+
+    # alpha:
+    vec[x3] = min(vec[x3], 1.)
+    vec[x3] = max(vec[x3],-1.)
+    albeta[0] = cuda.libdevice.acosf(vec[x3])
+    # beta:
+    if abs(albeta[0]) > _EPS:
+        tmp = vec[x1]/cuda.libdevice.sinf(albeta[0])
+        tmp = min(tmp, 1.)
+        tmp = max(tmp,-1.)
+        albeta[1] = cuda.libdevice.acosf(tmp)
+    if vec[x2] < -_EPS:
+        albeta[1] *= -1
+    albeta[1] = albeta[1] % pi2
+
+    xyproj[0] = cuda.libdevice.cosf(albeta[1])
+    xyproj[1] = cuda.libdevice.sinf(albeta[1])
+    if proj == 0: # stereographic projection
+        Op = cuda.libdevice.tanf(albeta[0]/2.)
+    else:                # equal-area projection
+        Op = cuda.libdevice.sinf(albeta[0]/2.)*sq2
+    xyproj[0] *= Op
+    xyproj[1] *= Op
+    albeta[0] *= 360./pi2
+    albeta[1] *= 360./pi2
+
+@cuda.jit((float32[:,:], int32, int32, float32[:,:], float32[:,:], boolean[:]))
+def _kernel_spherical_proj(vec, proj, north, xyproj, albeta, reverse):
+    i = cuda.grid(1)
+    if i < vec.shape[0]:
+        _device_spherical_proj(vec[i,:], proj, north, xyproj[i,:], albeta[i,:], reverse[i])
+
+@cuda.jit((float32[:,:], float32[:], float32[:,:], int32, int32, float32[:,:], float32[:,:], uint8[:]))
+def _kernel_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym):
+    i = cuda.grid(1)
+    if i < qa.shape[0]:
+        # initialize arrays:
+        qc = cuda.local.array(shape=4, dtype=float32)
+        Rsa2cr = cuda.local.array(shape=(3,3), dtype=float32)
+        vec = cuda.local.array(shape=3, dtype=float32)
+        xyproj1 = cuda.local.array(shape=2, dtype=float32)
+        albeta1 = cuda.local.array(shape=2, dtype=float32)
+        reverse = False
+        nsym = len(qsym)
+
+        # loop on symmetries:
+        for iq in range(nsym):
+            _device_q4_mult(qa[i,:], qsym[iq,:], qc)
+            _device_q4_to_mat(qc, Rsa2cr)
+            _device_matvec_mult(Rsa2cr,axis,vec)
+
+            _device_spherical_proj(vec, proj, north, xyproj1, albeta1, reverse)
+
+            update = False
+            if nsym == 24: #'cubic'
+                if (albeta1[1] < 45.+_EPS)*(albeta1[0] < albeta[i,0]+_EPS):
+                    update = True
+            elif nsym == 12: #'hex'
+                if (albeta1[1] < 30.+_EPS):
+                    update = True
+            elif nsym == 8: #'tetra'
+                if (albeta1[1] < 45.+_EPS):
+                    update = True
+            elif nsym == 4: #'ortho'
+                if (albeta1[1] < 90.+_EPS):
+                    update = True
+            elif nsym == 2: #'mono'
+                if (albeta1[1] < 180.+_EPS):
+                    update = True
+            else:
+                if (albeta1[1] > -_EPS):
+                    update = True
+
+            if update:
+                xyproj[i,0] = xyproj1[0]; xyproj[i,1] = xyproj1[1]
+                albeta[i,0] = albeta1[0]; albeta[i,1] = albeta1[1]
+                isym[i] = iq
 
 @cuda.jit((float32[:,:], float32[:,:], float32[:,:]))
 def _kernel_q4_mult(qa, qb, qc):
@@ -79,6 +200,18 @@ def _kernel_q4_inv(qa, qb):
     i = cuda.grid(1)
     if i < qa.shape[0]:
         _device_q4_inv(qa[i,:], qb[i,:])
+
+@cuda.jit((float32[:,:], float32[:,:,:]))
+def _kernel_q4_to_mat(q, R):
+    i = cuda.grid(1)
+    if i < q.shape[0]:
+        _device_q4_to_mat(q[i,:], R[i,:,:])
+
+@cuda.jit((float32[:,:,:], float32[:,:], float32[:,:]))
+def _kernel_matvec_mult(A,b,c):
+    i = cuda.grid(1)
+    if i < A.shape[0]:
+        _device_matvec_mult(A[i,:,:], b[i,:], c[i,:])
 
 @cuda.jit((float32[:,:], float32[:,:], float32[:]))
 def _kernel_q4_cosang2(qa, qb, cosang):
@@ -155,6 +288,40 @@ def _kernel_q4_to_FZ(qa, qsym, qFZ):
                 qFZ[i,2] = qc[2]
                 qFZ[i,3] = qc[3]
 
+def spherical_proj(vec, proj, north, xyproj, albeta, reverse, nthreads=256):
+    """
+    Wrapper calling the kernel to compute spherical projection.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    vec : ndarray
+        unit vectors to be projected, on GPU memory.
+
+    Examples
+    --------
+    >>> qa = q4np.q4_random(1024)
+    """
+    threadsperblock = nthreads
+    blockspergrid = (vec.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_spherical_proj[blockspergrid, threadsperblock](vec, proj, north, xyproj, albeta, reverse)
+
+def q4_to_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym, nthreads=256):
+    """
+    IPF projection on GPU.
+    """
+    threadsperblock = nthreads
+    blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
+    # initialize alpha-beta for the search of fundamental zone:
+    albeta *= 0.
+    albeta += 360.
+    # normalize axis:
+    norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
+    axis /= norm
+
+    _kernel_IPF_proj[blockspergrid, threadsperblock](qa, axis, qsym, proj, north, xyproj, albeta, isym)
+
 def q4_mult(qa, qb, qc, nthreads=256):
     """
     Wrapper calling the kernel to compute quaternion multiplication
@@ -186,6 +353,64 @@ def q4_mult(qa, qb, qc, nthreads=256):
     threadsperblock = nthreads
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_q4_mult[blockspergrid, threadsperblock](qa, qb, qc)
+
+def q4_to_mat(q, R, nthreads=256):
+    """
+    Wrapper calling the kernel to compute the rotation matrix from unit quaternions.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    q : ndarray
+        array of quaternions on GPU memory.
+    R : ndarray
+        corresponding array of rotation matrices, modified in place on GPU memory.
+
+    Examples
+    --------
+    >>> qarr = q4np.q4_random(1024)
+    >>> R0 = q4np.q4_to_mat(qarr)
+    >>> qarrGPU = cp.asarray(qarr)
+    >>> RGPU = cp.zeros(R0.shape, dtype=DTYPEf)
+    >>> q4_to_mat(qarrGPU, RGPU)
+    >>> np.allclose(R0, RGPU.get(), atol=1e-6)
+    True
+    """
+    threadsperblock = nthreads
+    blockspergrid = (q.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_q4_to_mat[blockspergrid, threadsperblock](q, R)
+
+def matvec_mult(A, b, c, nthreads=256):
+    """
+    Wrapper calling the kernel to compute matrix-vector multiplication.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    A : ndarray
+        stacked (n,3,3) matrices on GPU memory.
+    b : ndarray
+        stacked (n,3) vectors on GPU memory.
+    c : ndarray
+        result of `A`*`b`, modified in place on GPU memory.
+
+    Examples
+    --------
+    >>> A = np.random.rand(1024, 3,3).astype(DTYPEf)
+    >>> b = np.random.rand(1024, 3).astype(DTYPEf)
+    >>> c = np.matvec(A,b)
+    >>> AGPU = cp.asarray(A)
+    >>> bGPU = cp.asarray(b)
+    >>> cGPU = cp.zeros_like(c)
+    >>> matvec_mult(AGPU, bGPU, cGPU)
+    >>> np.allclose(c, cGPU.get(), atol=1e-6)
+    True
+    """
+    threadsperblock = nthreads
+    blockspergrid = (A.shape[0] + (threadsperblock - 1)) // threadsperblock
+    _kernel_matvec_mult[blockspergrid, threadsperblock](A, b, c)
 
 def q4_inv(qa, qb, nthreads=256):
     """
