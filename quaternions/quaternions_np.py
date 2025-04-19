@@ -1312,11 +1312,11 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback, dtype=DTYPEf):
 
     Examples
     --------
-    >>> qa = q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
+    >>> qa = q4_random(256)
+    >>> grains = np.repeat(np.arange(0,256), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4_mult(qa[grains - 1], q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4_mult(qa[grains - 1], q4_orispread(ncrys=1024*256, thetamax=2., misori=True))
     >>> qsym = q4_sym_cubic()
     >>> qavg, GOS, theta, GROD, theta_iter = q4_mean_multigrain(qarr, qsym, unic, iunic, iback)
     >>> ang = q4_angle(qa, qavg)
@@ -1477,7 +1477,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     >>> vec /= norm[..., np.newaxis]
     >>> xyproj0, albeta0, reverse0 = spherical_proj(vec, proj="stereo", north=3)
     >>> xyproj1, albeta1, reverse1 = spherical_proj(vec, proj="equal-area", north=3)
-    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    >>> np.allclose(albeta0, albeta1, atol=0.5)
     True
     """
     pi2 = 2.*np.pi

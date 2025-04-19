@@ -81,13 +81,14 @@ def _device_q4_to_mat(q, R):
 
 @cuda.jit((float32[:,:], float32[:], float32[:]), fastmath=True, device=True)
 def _device_matvec_mult(A,b,c):
-    c[0] = A[0,0]*b[0] + A[0,1]*b[1] + A[0,2]*b[2]
-    c[1] = A[1,0]*b[0] + A[1,1]*b[1] + A[1,2]*b[2]
-    c[2] = A[2,0]*b[0] + A[2,1]*b[1] + A[2,2]*b[2]
-    #m, n = A.shape
-    #for i in range(m):
-    #    for j in range(n):
-    #        c[i] += A[i,j]*b[j]
+    #c[0] = A[0,0]*b[0] + A[0,1]*b[1] + A[0,2]*b[2]
+    #c[1] = A[1,0]*b[0] + A[1,1]*b[1] + A[1,2]*b[2]
+    #c[2] = A[2,0]*b[0] + A[2,1]*b[1] + A[2,2]*b[2]
+    m, n = A.shape
+    for i in range(m):
+        c[i] = 0.
+        for j in range(n):
+            c[i] += A[i,j]*b[j]
 
 @cuda.jit(float32(float32[:], float32[:]), fastmath=True, device=True)
 def _device_q4_cosang2(qa, qb):
@@ -137,14 +138,45 @@ def _device_spherical_proj(vec, proj, north, xyproj, albeta, reverse):
     albeta[0] *= 360./pi2
     albeta[1] *= 360./pi2
 
+@cuda.jit((float32[:], uint8, float32[:]), fastmath=True, device=True)
+def _device_RGB_IPF(albeta,nsym,RGB):
+    if nsym == 24: #'cubic'
+        pi32 = cuda.libdevice.acosf(-1.)
+        deg2rad = pi32/180.
+        beta = albeta[1]*deg2rad
+        alpha_max = cuda.libdevice.acosf(cuda.libdevice.sqrtf(1./(2.+cuda.libdevice.tanf(beta)**2)))
+        alpha_max /= deg2rad
+        beta_max = 45.
+    elif nsym == 12: #'hex'
+        alpha_max = 90.
+        beta_max = 30.
+    elif nsym == 8: #'tetra'
+        alpha_max = 90.
+        beta_max = 45.
+    elif nsym == 4: #'ortho'
+        alpha_max = 90.
+        beta_max = 90.
+    elif nsym == 2: #'mono'
+        alpha_max = 90.
+        beta_max = 180.
+    else:
+        alpha_max = 90.
+        beta_max = 360.
+
+    RGB[0] =  1. - albeta[0]/alpha_max
+    RGB[1] = (1. - albeta[1]/beta_max) * albeta[0]/alpha_max
+    RGB[2] = (     albeta[1]/beta_max) * albeta[0]/alpha_max
+    mx = max(RGB[0], RGB[1]); mx = max(mx, RGB[2])
+    RGB[0] /= mx; RGB[1] /= mx; RGB[2] /= mx
+
 @cuda.jit((float32[:,:], int32, int32, float32[:,:], float32[:,:], boolean[:]))
 def _kernel_spherical_proj(vec, proj, north, xyproj, albeta, reverse):
     i = cuda.grid(1)
     if i < vec.shape[0]:
         _device_spherical_proj(vec[i,:], proj, north, xyproj[i,:], albeta[i,:], reverse[i])
 
-@cuda.jit((float32[:,:], float32[:], float32[:,:], int32, int32, float32[:,:], float32[:,:], uint8[:]))
-def _kernel_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym):
+@cuda.jit((float32[:,:], float32[:], float32[:,:], int32, int32, float32[:,:], float32[:,:], float32[:,:], uint8[:]))
+def _kernel_IPF_proj(qa, axis, qsym, proj, north, xyproj, RGB, albeta, isym):
     i = cuda.grid(1)
     if i < qa.shape[0]:
         # initialize arrays:
@@ -154,7 +186,7 @@ def _kernel_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym):
         xyproj1 = cuda.local.array(shape=2, dtype=float32)
         albeta1 = cuda.local.array(shape=2, dtype=float32)
         reverse = False
-        nsym = len(qsym)
+        nsym = np.uint8(len(qsym))
 
         # loop on symmetries:
         for iq in range(nsym):
@@ -188,6 +220,9 @@ def _kernel_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym):
                 xyproj[i,0] = xyproj1[0]; xyproj[i,1] = xyproj1[1]
                 albeta[i,0] = albeta1[0]; albeta[i,1] = albeta1[1]
                 isym[i] = iq
+
+        # RGB code:
+        _device_RGB_IPF(albeta[i,:],nsym,RGB[i,:])
 
 @cuda.jit((float32[:,:], float32[:,:], float32[:,:]))
 def _kernel_q4_mult(qa, qb, qc):
@@ -301,18 +336,61 @@ def spherical_proj(vec, proj, north, xyproj, albeta, reverse, nthreads=256):
 
     Examples
     --------
-    >>> qa = q4np.q4_random(1024)
+    >>> ncrys = 1024
+    >>> vec = np.random.rand(ncrys,3).astype(DTYPEf)
+    >>> norm = np.sqrt(np.sum(vec**2, axis=1))
+    >>> vec /= norm[..., np.newaxis]
+    >>> xyproj0, albeta0, reverse0 = q4np.spherical_proj(vec, proj="stereo", north=3)
+    >>> vecGPU = cp.asarray(vec)
+    >>> xyprojGPU = cp.zeros((ncrys,2), dtype=DTYPEf)
+    >>> albetaGPU = cp.zeros((ncrys,2), dtype=DTYPEf)
+    >>> reverseGPU = cp.zeros(ncrys, dtype=bool)
+    >>> spherical_proj(vecGPU, 0, 3, xyprojGPU, albetaGPU, reverseGPU)
+    >>> np.allclose(xyproj0, xyprojGPU.get(), atol=1e-3)
+    True
+    >>> np.allclose(albeta0, albetaGPU.get(), atol=0.5)
+    True
     """
     threadsperblock = nthreads
     blockspergrid = (vec.shape[0] + (threadsperblock - 1)) // threadsperblock
     _kernel_spherical_proj[blockspergrid, threadsperblock](vec, proj, north, xyproj, albeta, reverse)
 
-def q4_to_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym, nthreads=256):
+def q4_to_IPF_proj(qa, axis, qsym, proj, north, xyproj, RGB, albeta, isym, nthreads=256):
     """
-    IPF projection on GPU.
+    Wrapper calling the kernel to compute IPF projection.
+
+    Numba GPU version, all input arrays already on GPU memory.
+
+    Parameters
+    ----------
+    qa : ndarray
+        array of quaternions or single quaternion on GPU memory.
+
+    Examples
+    --------
+    >>> ncrys = 1024
+    >>> qarr = q4np.q4_random(ncrys)
+    >>> qsym = q4np.q4_sym_cubic()
+    >>> axis = np.array([1,0,0], dtype=DTYPEf)
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3)
+    >>> qarrGPU = cp.asarray(qarr)
+    >>> qsymGPU = cp.asarray(qsym)
+    >>> axisGPU = cp.asarray(axis)
+    >>> xyprojGPU = cp.zeros((ncrys,2), dtype=DTYPEf)
+    >>> RGBGPU = cp.zeros((ncrys,3), dtype=DTYPEf)
+    >>> albetaGPU = cp.zeros((ncrys,2), dtype=DTYPEf)+360
+    >>> isymGPU = cp.zeros(ncrys, dtype=np.uint8)
+    >>> q4_to_IPF_proj(qarrGPU, axisGPU, qsymGPU, 0, 3, xyprojGPU, RGBGPU, albetaGPU, isymGPU)
+    >>> np.allclose(xyproj0, xyprojGPU.get(), atol=1e-3)
+    True
+    >>> np.allclose(RGB0, RGBGPU.get(), atol=1e-3)
+    True
+    >>> np.allclose(albeta0, albetaGPU.get(), atol=0.5)
+    True
     """
     threadsperblock = nthreads
     blockspergrid = (qa.shape[0] + (threadsperblock - 1)) // threadsperblock
+
     # initialize alpha-beta for the search of fundamental zone:
     albeta *= 0.
     albeta += 360.
@@ -320,7 +398,7 @@ def q4_to_IPF_proj(qa, axis, qsym, proj, north, xyproj, albeta, isym, nthreads=2
     norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
     axis /= norm
 
-    _kernel_IPF_proj[blockspergrid, threadsperblock](qa, axis, qsym, proj, north, xyproj, albeta, isym)
+    _kernel_IPF_proj[blockspergrid, threadsperblock](qa, axis, qsym, proj, north, xyproj, RGB, albeta, isym)
 
 def q4_mult(qa, qb, qc, nthreads=256):
     """
@@ -725,11 +803,11 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
 
     Examples
     --------
-    >>> qa = q4np.q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
+    >>> qa = q4np.q4_random(256)
+    >>> grains = np.repeat(np.arange(0,256), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4np.q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4np.q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*256, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qarr_gpu = cp.asarray(qarr)
     >>> qsym_gpu = cp.asarray(qsym)

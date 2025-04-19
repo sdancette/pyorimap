@@ -260,6 +260,7 @@ class OriMap(pv.ImageData):
             logging.info("... phase {}.".format(phi))
             whrPhi = (phase == phi)
             qarr = self.qarray[whrPhi]
+            nqPhi = len(qarr)
 
             try:
                 qsym = self.params.phase_to_crys[phi].qsym
@@ -270,7 +271,23 @@ class OriMap(pv.ImageData):
 
             for iax, axis in enumerate(sampleAx):
                 logging.info("... ... axis {}.".format(iax))
-                if self.params.compute_mode == 'numba_gpu' or self.params.compute_mode == 'numba_cpu':
+                if   self.params.compute_mode == 'numba_gpu':
+                    iproj = 0 if proj == 'stereo' else 1
+
+                    qarr_gpu = cp.asarray(qarr)
+                    qsym_gpu = cp.asarray(qsym)
+                    axis_gpu = cp.asarray(axis)
+                    xyproj_gpu = cp.zeros((nqPhi,2), dtype=DTYPEf)
+                    RGB_gpu = cp.zeros((nqPhi,3), dtype=DTYPEf)
+                    albeta_gpu = cp.zeros((nqPhi,2), dtype=DTYPEf)+360
+                    isym_gpu = cp.zeros(nqPhi, dtype=np.uint8)
+                    q4nGPU.q4_to_IPF_proj(qarr_gpu, axis_gpu, qsym_gpu, iproj, 3, xyproj_gpu, RGB_gpu, albeta_gpu, isym_gpu)
+
+                    xyproj = xyproj_gpu.get()
+                    RGB = RGB_gpu.get()
+                    albeta = albeta_gpu.get()
+                    isym = isym_gpu.get()
+                elif self.params.compute_mode == 'numba_cpu':
                     iproj = 0 if proj == 'stereo' else 1
                     xyproj, RGB, albeta, isym = q4nCPU.q4_to_IPF(qarr, axis, qsym, proj=iproj, north=3)
                 else:
@@ -282,6 +299,16 @@ class OriMap(pv.ImageData):
                     self.cell_data['IPFy'][whrPhi] = RGB
                 elif iax == 2:
                     self.cell_data['IPFz'][whrPhi] = RGB
+
+        if self.params.compute_mode == 'numba_gpu':
+            # free GPU memory for future calculation:
+            qarr_gpu =   qarr_gpu[0:1]*0.
+            qsym_gpu = qsym_gpu[0:1]*0.
+            xyproj_gpu = xyproj_gpu[0:1]*0.
+            RGB_gpu = RGB_gpu[0:1]*0.
+            albeta_gpu = albeta_gpu[0:1]*0.
+            isym_gpu = isym_gpu[0:1]*0.
+
 
         logging.info("Finished to compute IPF projection.")
 
@@ -724,6 +751,17 @@ class OriMap(pv.ImageData):
         self.cell_data['GOS'] = GOS
         self.cell_data['theta'] = theta
 
+        if self.params.compute_mode == 'numba_gpu':
+            # free GPU memory for future calculation:
+            qa_gpu =   qa_gpu[0:1]*0.
+            qsym_gpu = qsym_gpu[0:1]*0.
+            qavg_gpu = qavg_gpu[0:1]*0.
+            GOS_gpu = GOS_gpu[0:1]*0.
+            theta_gpu = theta_gpu[0:1]*0.
+            GROD_gpu = GROD_gpu[0:1]*0.
+            theta_iter_gpu = theta_iter_gpu[0:1]*0.
+
+        # save average grain data:
         mydtype = [('grain', 'i4'), ('phase', 'i4'), ('npix', 'i4'), ('fvol', 'f4'),
                    ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'), ('GOS', 'f4'), ('KAMavg', 'f4'), ('theta', 'f4')]
         unic, iunic, counts = np.unique(grains, return_index=True, return_counts=True)
@@ -802,6 +840,15 @@ class OriMap(pv.ImageData):
 
         self.cell_data['GROD'] = GROD
         self.cell_data['GOS'] = GOS
+
+        if self.params.compute_mode == 'numba_gpu':
+            # free GPU memory for future calculation:
+            qa_gpu =   qa_gpu[0:1]*0.
+            qsym_gpu = qsym_gpu[0:1]*0.
+            qavg_gpu = qavg_gpu[0:1]*0.
+            GROD_gpu = GROD_gpu[0:1]*0.
+            GROD_stat_gpu = GROD_stat_gpu[0:1]*0.
+            theta_iter_gpu = theta_iter_gpu[0:1]*0.
 
         logging.info("Finished to compute grain average orientation and GROD (grain by grain).")
 

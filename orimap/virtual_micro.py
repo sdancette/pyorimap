@@ -155,6 +155,8 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     seeds[:,0] *= dimX
     seeds[:,1] *= dimY
     seeds[:,2] *= dimZ
+    # shuffle seed position:
+    np.random.shuffle(seeds) # shuffled along the 1rst axis
     ngrains = len(seeds)
 
     logging.info("Starting to compute KDTree.")

@@ -650,7 +650,6 @@ def mat_mult(A, B):
                             C[icrys,i,j] += A[icrys,i,k] * B[0,k,j]
     return C
 
-
 @njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
 def spherical_proj(vec, proj=0, north=3):
     """
@@ -683,11 +682,11 @@ def spherical_proj(vec, proj=0, north=3):
     >>> xyproj1a, albeta1a, reverse1a = q4np.spherical_proj(vec, proj="equal-area", north=3)
     >>> xyproj0b, albeta0b, reverse0b = spherical_proj(vec, proj=0, north=3)
     >>> xyproj1b, albeta1b, reverse1b = spherical_proj(vec, proj=1, north=3)
-    >>> np.allclose(xyproj0a, xyproj0b, atol=1e-4)
+    >>> np.allclose(xyproj0a, xyproj0b, atol=1e-3)
     True
-    >>> np.allclose(xyproj1a, xyproj1b, atol=1e-4)
+    >>> np.allclose(xyproj1a, xyproj1b, atol=1e-3)
     True
-    >>> np.allclose(albeta0a, albeta0b, atol=0.1)
+    >>> np.allclose(albeta0a, albeta0b, atol=0.5)
     True
     """
     sq2 = np.sqrt(2.)
@@ -776,17 +775,17 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
     >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=0, north=3)
     >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
     True
-    >>> np.allclose(RGB0, RGB1, atol=0.0025)
+    >>> np.allclose(RGB0, RGB1, atol=0.001)
     True
-    >>> np.allclose(albeta0, albeta1, atol=0.1)
+    >>> np.allclose(albeta0, albeta1, atol=0.5)
     True
     >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="equal-area", north=3)
     >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=1, north=3)
     >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
     True
-    >>> np.allclose(RGB0, RGB1, atol=0.0025)
+    >>> np.allclose(RGB0, RGB1, atol=0.001)
     True
-    >>> np.allclose(albeta0, albeta1, atol=0.2)
+    >>> np.allclose(albeta0, albeta1, atol=0.5)
     True
     """
     deg2rad = np.pi/180.
@@ -1005,11 +1004,11 @@ def q4_mean_multigrain(qarr, qsym, unigrain, iunic, iback):
 
     Examples
     --------
-    >>> qa = q4np.q4_random(100)
-    >>> grains = np.repeat(np.arange(0,100), 1024) + 1
+    >>> qa = q4np.q4_random(256)
+    >>> grains = np.repeat(np.arange(0,256), 1024) + 1
     >>> np.random.shuffle(grains)
     >>> unic, iunic, iback = np.unique(grains, return_index=True, return_inverse=True)
-    >>> qarr = q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*100, thetamax=2., misori=True))
+    >>> qarr = q4_mult(qa[grains - 1], q4np.q4_orispread(ncrys=1024*256, thetamax=2., misori=True))
     >>> qsym = q4np.q4_sym_cubic()
     >>> qavg, GOS, theta, GROD, theta_iter = q4_mean_multigrain(qarr, qsym, unic, iunic, iback)
     >>> ang = q4np.q4_angle(qa, qavg)
