@@ -1448,7 +1448,7 @@ def q4_orispread(ncrys=1024, thetamax=1., misori=True, dtype=DTYPEf):
 
     return qarr
 
-def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
+def spherical_proj(vec, proj="stereo", north=3, angles="deg", dtype=DTYPEf):
     """
     Performs stereographic or equal-area projection of vector `vec` in the equatorial plane.
 
@@ -1460,13 +1460,15 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
         type of projection, 'stereo' for stereographic or 'equal-area'.
     north : int, default=3
         North pole defining the projection plane.
+    angles : str, default='deg'
+        unit to return polar angles, degrees or radians.
 
     Returns
     -------
     xyproj : ndarray
         (ncrys, 2) array of projected coordinates in the equatorial plane.
     albeta : ndarray
-        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees or radians depending on `angles` parameter.
     reverse : ndarray
         boolean array indicating where the input unit vectors were pointing to the Southern hemisphere and reversed.
 
@@ -1481,6 +1483,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     True
     """
     pi2 = 2.*np.pi
+    rad2deg = 360./pi2
     if north == 1:
         x1 = 1; x2 = 2; x3 = 0
     elif north == 2:
@@ -1488,7 +1491,6 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     elif north == 3:
         x1 = 0; x2 = 1; x3 = 2
     else:
-        logging.warning("Z!! choice of north pole: {} (should be 1 for [100], 2 for [010], 3 for [001])".format(north))
         x1 = 0; x2 = 1; x3 = 2
 
     vec = np.atleast_2d(vec)
@@ -1496,7 +1498,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     xyproj = np.zeros((len(vec),2), dtype=dtype)
 
     # check Northern hemisphere:
-    reverse = (vec[:,x3] < -_EPS)
+    reverse = (vec[:,x3] < 0.)
     vec[reverse] *= -1
 
     # alpha:
@@ -1509,7 +1511,7 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
     tmp = np.minimum(tmp,1.)
     tmp = np.maximum(tmp,-1.)
     albeta[:,1][whr] = np.arccos(tmp)
-    albeta[:,1][vec[:,x2] < -_EPS] *= -1
+    albeta[:,1][vec[:,x2] < 0.] *= -1
     albeta[:,1] = albeta[:,1] % pi2
 
     xyproj[:,0] = np.cos(albeta[:,1])
@@ -1520,9 +1522,58 @@ def spherical_proj(vec, proj="stereo", north=3, dtype=DTYPEf):
         Op = np.sin(albeta[:,0]/2.)*np.sqrt(2.)
     xyproj *= Op[..., np.newaxis]
 
-    return xyproj, np.degrees(albeta), reverse
+    if angles == 'deg':
+        albeta *= rad2deg
 
-def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, dtype=DTYPEf):
+    return xyproj, albeta, reverse
+
+def max_albeta_fundamental(albeta, sym="cubic", dtype=DTYPEf):
+    """
+    Maximum alpha, beta values for a given crystal symmetry in the fundamental sector.
+
+    Parameters
+    ----------
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in radians.
+    sym : str, default = 'cubic'
+        crystal symmetry
+
+    Returns
+    -------
+    alpha_max : ndarray
+        (ncrys,) array of maximum alpha (radians) in the fundamental sector.
+    beta_max : ndarray
+        (ncrys,) array of maximum beta (radians) in the fundamental sector.
+    """
+    ncrys = len(np.atleast_2d(albeta))
+    if sym == 'cubic':
+        beta = albeta[:,1]
+        if beta.max() > np.pi/4:
+            beta =  beta % (np.pi/2)
+            whr = (beta > np.pi/4)
+            beta[whr] = np.pi/2 - beta[whr]
+        alpha_max = np.arccos(np.sqrt(1./(2. + np.tan(beta)**2)), dtype=dtype)
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi/4
+    elif sym == 'hex':
+        alpha_max = np.ones(ncrys, dtype=dtype)*np.pi/2
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi/6
+    elif sym == 'tetra':
+        alpha_max = np.ones(ncrys, dtype=dtype)*np.pi/2
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi/4
+    elif sym == 'ortho':
+        alpha_max = np.ones(ncrys, dtype=dtype)*np.pi/2
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi/2
+    elif sym == 'mono':
+        alpha_max = np.ones(ncrys, dtype=dtype)*np.pi/2
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi
+    else:
+        logging.error("Z!! undefined symmetry {} for IPF projection.".format(sym))
+        alpha_max = np.ones(ncrys, dtype=dtype)*np.pi/2
+        beta_max =  np.ones(ncrys, dtype=dtype)*np.pi*2
+
+    return alpha_max, beta_max
+
+def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, method=1, dtype=DTYPEf):
     """
     Inverse Pole Figure projection based on crystal symmetries.
 
@@ -1538,6 +1589,8 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
         type of projection, 'stereo' for stereographic or 'equal-area'.
     north : int, default=3
         North pole defining the projection plane.
+    method : int, default=1
+        method to bring the sample vector in the elementary subspace (method 1 is faster).
 
     Returns
     -------
@@ -1555,8 +1608,25 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
     >>> qarr = q4_random(1024)
     >>> qsym = q4_sym_cubic()
     >>> axis = np.array([1,0,0], dtype=DTYPEf)
-    >>> xyproj, RGB, albeta, isym = q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3, method=1)
+    >>> xyproj2, RGB2, albeta2, isym2 = q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3, method=2)
+    >>> np.allclose(xyproj1, xyproj2, atol=1e-3)
+    True
+    >>> np.allclose(RGB1, RGB2, atol=1e-3)
+    True
+    >>> np.allclose(albeta1, albeta2, atol=0.5)
+    True
     """
+    if north == 1:
+        x1 = 1; x2 = 2; x3 = 0
+    elif north == 2:
+        x1 = 2; x2 = 0; x3 = 1
+    elif north == 3:
+        x1 = 0; x2 = 1; x3 = 2
+    else:
+        logging.warning("Z!! choice of north pole: {} (should be 1 for [100], 2 for [010], 3 for [001])".format(north))
+        x1 = 0; x2 = 1; x3 = 2
+
     deg2rad = np.pi/180.
     norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
     axis = np.atleast_1d(axis) / norm
@@ -1575,50 +1645,90 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
     else:
         sym = 'unknown'
 
-    albeta = np.zeros((ncrys,2), dtype=dtype)+360
+    albeta = np.zeros((ncrys,2), dtype=dtype) + 360
     xyproj = np.zeros((ncrys,2), dtype=dtype)
     isym   = np.zeros(ncrys, dtype=np.uint8)
 
-    for iq, q in enumerate(qsym):
-        qequ = q4_mult(qarr, q)
-        Rsa2cr = q4_to_mat(qequ)
-        vec = np.dot(Rsa2cr, axis)
-
-        xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, dtype=dtype)
+    if method == 1:
+        Rsa2cr = q4_to_mat(qarr)
+        #vec = np.dot(Rsa2cr, axis).astype(dtype)
+        vec = np.matvec(Rsa2cr, axis, dtype=dtype)
+        vec = np.atleast_2d(vec)
+        #### bring projection into the elementary subspace for the RGB color code:
         if sym == 'cubic':
-            whr = (albeta1[:,1] < 45.+_EPS) * (albeta1[:,0] < albeta[:,0] +_EPS)
-        elif sym == 'hex':
-            whr = (albeta1[:,1] < 30.+_EPS)
-        elif sym == 'tetra':
-            whr = (albeta1[:,1] < 45.+_EPS)
-        elif sym == 'ortho':
-            whr = (albeta1[:,1] < 90.+_EPS)
-        elif sym == 'mono':
-            whr = (albeta1[:,1] < 180.+_EPS)
+            #### ensure vec(2)>=vec(0)>=vec(1)>=0 in the elementary subspace:
+            tmp = np.sort(np.abs(vec), axis=1)
+            vec[:,x1] = tmp[:,1]
+            vec[:,x2] = tmp[:,0]
+            vec[:,x3] = tmp[:,2]
+
+            xyproj, albeta, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
         else:
-            whr = (albeta1[:,1] > -_EPS)
-        xyproj[whr,:] = xyproj1[whr,:]
-        albeta[whr,:] = albeta1[whr,:]
-        isym[whr] = iq
+            if sym == 'hex':
+                xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
+                alpha = albeta1[:,0]
+                beta =  albeta1[:,1] % (np.pi/3)
+                whr = (beta > np.pi/6)
+                beta[whr] = np.pi/3 - beta[whr]
+            elif sym == 'tetra':
+                xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
+                alpha = albeta1[:,0]
+                beta =  albeta1[:,1] % (np.pi/2)
+                whr = (beta > np.pi/4)
+                beta[whr] = np.pi/2 - beta[whr]
+            elif sym == 'ortho':
+                xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
+                alpha = albeta1[:,0]
+                beta =  albeta1[:,1] % (np.pi)
+                whr = (beta > np.pi/2)
+                beta[whr] = np.pi - beta[whr]
+            elif sym == 'mono':
+                xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
+                alpha = albeta1[:,0]
+                beta =  albeta1[:,1]
+                whr = (beta > np.pi)
+                beta[whr] = 2*np.pi - beta[whr]
+
+            xyproj[:,0] = np.cos(beta)
+            xyproj[:,1] = np.sin(beta)
+            if proj == "stereo": # stereographic projection
+                Op = np.tan(alpha/2.)
+            else:                # equal-area projection
+                Op = np.sin(alpha/2.)*np.sqrt(2.)
+            xyproj *= Op[..., np.newaxis]
+            albeta[:,0] = alpha
+            albeta[:,1] = beta
+        alpha_max, beta_max = max_albeta_fundamental(albeta, sym)
+    else:
+        for iq, q in enumerate(qsym):
+            qequ = q4_mult(qarr, q)
+            Rsa2cr = q4_to_mat(qequ)
+            vec = np.matvec(Rsa2cr, axis, dtype=dtype)
+            #vec = np.dot(Rsa2cr, axis).astype(dtype)
+
+            xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
+
+            _EPS = np.arccos(1. - 1./2**24, dtype=dtype) # float32 arccos precision
+            if sym == 'cubic':
+                alpha_max, beta_max = max_albeta_fundamental(albeta1, sym)
+                whr = (albeta1[:,1]-_EPS < np.pi/4) * (albeta1[:,0]-_EPS < alpha_max)
+            elif sym == 'hex':
+                whr = (albeta1[:,1]-_EPS < np.pi/6)
+            elif sym == 'tetra':
+                whr = (albeta1[:,1]-_EPS < np.pi/4)
+            elif sym == 'ortho':
+                whr = (albeta1[:,1]-_EPS < np.pi/2)
+            elif sym == 'mono':
+                whr = (albeta1[:,1]-_EPS < np.pi)
+            else:
+                whr = (albeta1[:,1] > -_EPS)
+
+            xyproj[whr,:] = xyproj1[whr,:]
+            albeta[whr,:] = albeta1[whr,:]
+            isym[whr] = iq
+        alpha_max, beta_max = max_albeta_fundamental(albeta, sym)
 
     RGB = np.zeros((ncrys,3), dtype=dtype)
-    if sym == 'cubic':
-        alpha_max = np.degrees( np.arccos( np.sqrt(1./(2. + np.tan(albeta[:,1]*deg2rad)**2)) ) )
-        beta_max = np.ones(ncrys, dtype=dtype)*45.
-    elif sym == 'hex':
-        alpha_max = np.ones(ncrys, dtype=dtype)*90.
-        beta_max = np.ones(ncrys, dtype=dtype)*30.
-    elif sym == 'tetra':
-        alpha_max = np.ones(ncrys, dtype=dtype)*90.
-        beta_max = np.ones(ncrys, dtype=dtype)*45.
-    elif sym == 'ortho':
-        alpha_max = np.ones(ncrys, dtype=dtype)*90.
-        beta_max = np.ones(ncrys, dtype=dtype)*90.
-    elif sym == 'mono':
-        alpha_max = np.ones(ncrys, dtype=dtype)*90.
-        beta_max = np.ones(ncrys, dtype=dtype)*180.
-    else:
-        logging.error("Z!! unproper symmetry {} for IPF RGB".format(sym))
     RGB[:,0] =  1. - albeta[:,0]/alpha_max
     RGB[:,1] = (1. - albeta[:,1]/beta_max) * albeta[:,0]/alpha_max
     RGB[:,2] = (albeta[:,1]/beta_max)      * albeta[:,0]/alpha_max
@@ -1628,7 +1738,7 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, d
 
     logging.info("Computed IPF projection for axis {}.".format(axis))
 
-    return xyproj, RGB, albeta, isym
+    return xyproj, RGB, np.degrees(albeta), isym
 
 #def XXXq4_from_mat(R, dtype=DTYPEf):
 #    """

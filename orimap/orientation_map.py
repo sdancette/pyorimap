@@ -281,7 +281,7 @@ class OriMap(pv.ImageData):
                     RGB_gpu = cp.zeros((nqPhi,3), dtype=DTYPEf)
                     albeta_gpu = cp.zeros((nqPhi,2), dtype=DTYPEf)+360
                     isym_gpu = cp.zeros(nqPhi, dtype=np.uint8)
-                    q4nGPU.q4_to_IPF_proj(qarr_gpu, axis_gpu, qsym_gpu, iproj, 3, xyproj_gpu, RGB_gpu, albeta_gpu, isym_gpu)
+                    q4nGPU.q4_to_IPF(qarr_gpu, axis_gpu, qsym_gpu, iproj, 3, 1, xyproj_gpu, RGB_gpu, albeta_gpu, isym_gpu)
 
                     xyproj = xyproj_gpu.get()
                     RGB = RGB_gpu.get()
@@ -289,9 +289,9 @@ class OriMap(pv.ImageData):
                     isym = isym_gpu.get()
                 elif self.params.compute_mode == 'numba_cpu':
                     iproj = 0 if proj == 'stereo' else 1
-                    xyproj, RGB, albeta, isym = q4nCPU.q4_to_IPF(qarr, axis, qsym, proj=iproj, north=3)
+                    xyproj, RGB, albeta, isym = q4nCPU.q4_to_IPF(qarr, axis, qsym, proj=iproj, north=3, method=1)
                 else:
-                    xyproj, RGB, albeta, isym = q4np.q4_to_IPF(qarr, axis=axis, qsym=qsym, proj=proj, north=3)
+                    xyproj, RGB, albeta, isym = q4np.q4_to_IPF(qarr, axis=axis, qsym=qsym, proj=proj, north=3, method=1)
 
                 if iax == 0:
                     self.cell_data['IPFx'][whrPhi] = RGB
@@ -662,28 +662,39 @@ class OriMap(pv.ImageData):
         phase = self.cell_data['phase']
         region = self.cell_data['region']
 
+
+        filtered = False
         # first, exclusion of regions outside of phase_min and phase_max:
-        whr = (phase < phimin) + (phase >= phimax)
-        region[whr] = 0
-        unic, indices, counts = np.unique(region, return_inverse=True, return_counts=True)
+        if (phase.min() < phimin) or (phase.max() > phimax):
+            filtered = True
+            whr = (phase < phimin) + (phase >= phimax)
+            region[whr] = 0
+        unic, iback, counts = np.unique(region, return_inverse=True, return_counts=True)
 
         # then exclusion of regions outside of npix_min and npix_max:
-        toremove = (counts < nmin) + (counts >= nmax)
-        unic[toremove] = 0
-        region = unic[indices]
-        # re-run the counting:
-        unic, indices, counts = np.unique(region, return_inverse=True, return_counts=True)
+        if (counts.min() < nmin) or (counts.max() > nmax):
+            filtered = True
+            toremove = (counts < nmin) + (counts >= nmax)
+            unic[toremove] = 0
+            region = unic[iback]
+            # re-run the counting:
+            unic, iback, counts = np.unique(region, return_inverse=True, return_counts=True)
 
         # redefine the unique grain label in a consecutive sequence:
-        newu = np.arange(len(unic))
-        if unic.min() == 0:
-            self.cell_data['grains'] = newu[indices] # preserve '0' region with label 0
-        elif unic.min() >= 1:
-            self.cell_data['grains'] = newu[indices]+1 # there is no region outside of the specified ranges, start labeling at 1
-        # final count:
-        unic, counts = np.unique(self.cell_data['grains'], return_counts=True)
+        if filtered:
+            newu = np.arange(len(unic))
+            if unic.min() == 0:
+                self.cell_data['grains'] = newu[iback] # preserve '0' region with label 0
+            elif unic.min() >= 1:
+                self.cell_data['grains'] = newu[iback]+1 # there is no region outside of the specified ranges, start labeling at 1
+            # final count:
+            unic, counts = np.unique(self.cell_data['grains'], return_counts=True)
 
-        logging.info("Finished to relabel {} grains with min size {} and min phase {}.".format(unic.max(), nmin, phimin))
+            logging.info("Finished to relabel {} grains with min size {} and min phase {}.".format(unic.max(), nmin, phimin))
+        else:
+            self.cell_data['grains'] = region
+            logging.info("No grain to relabel with min size {} and min phase {}.".format(nmin, phimin))
+
 
         return unic, counts
 

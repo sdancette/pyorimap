@@ -18,7 +18,7 @@ import numpy as np
 import scipy.ndimage as ndi
 from pyorimap.quaternions import quaternions_np as q4np
 
-from numba import njit, prange, int32, float32, boolean
+from numba import njit, prange, uint8, int32, float32, boolean
 from numba.types import Tuple
 
 DTYPEf = np.float32
@@ -236,7 +236,7 @@ def q4_cosang2(qa, qb):
                              qa[0,3]*qb[i,3]), 1.)
     return ang
 
-@njit(Tuple((float32[:], int32[:]))(float32[:,:], float32[:,:], float32[:,:], int32), fastmath=True, parallel=True)
+@njit(Tuple((float32[:], int32[:]))(float32[:,:], float32[:,:], float32[:,:], uint8), fastmath=True, parallel=True)
 def q4_disori_angle(qa, qb, qsym, method=1):
     """
     Disorientation angle (degrees) between `qa` and `qb`, taking `qsym` symmetries into account.
@@ -318,7 +318,7 @@ def q4_disori_angle(qa, qb, qsym, method=1):
         ang[j] = 2*np.arccos(ang[j])*rad2deg
     return ang, ii
 
-@njit(Tuple((float32[:,:], int32[:]))(float32[:,:], float32[:,:], float32[:,:], int32, int32), fastmath=True, parallel=True)
+@njit(Tuple((float32[:,:], int32[:]))(float32[:,:], float32[:,:], float32[:,:], uint8, uint8), fastmath=True, parallel=True)
 def q4_disori_quat(qa, qb, qsym, frame=0, method=1):
     """
     Disorientation quaternion between `qa` and `qb`, taking `qsym` symmetries into account.
@@ -650,8 +650,8 @@ def mat_mult(A, B):
                             C[icrys,i,j] += A[icrys,i,k] * B[0,k,j]
     return C
 
-@njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], int32, int32), fastmath=True, parallel=True)
-def spherical_proj(vec, proj=0, north=3):
+@njit(Tuple((float32[:,:], float32[:,:], int32[:]))(float32[:,:], uint8, uint8, uint8), fastmath=True, parallel=True)
+def spherical_proj(vec, proj=0, north=3, angles=0):
     """
     Performs stereographic or equal-area projection of vector `vec` in the equatorial plane.
 
@@ -663,13 +663,15 @@ def spherical_proj(vec, proj=0, north=3):
         type of projection, 0 for stereographic or 1 for equal-area.
     north : int, default=3
         North pole defining the projection plane.
+    angles : int, default=0
+        unit to return polar angles, 0 for degrees, 1 for radians.
 
     Returns
     -------
     xyproj : ndarray
         (ncrys, 2) array of projected coordinates in the equatorial plane.
     albeta : ndarray
-        (ncrys, 2) array of [alpha, beta] polar angles in degrees.
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees or radians depending on `angles` parameter.
     reverse : ndarray
         boolean array indicating where the input unit vectors were pointing to the Southern hemisphere and reversed.
 
@@ -680,8 +682,8 @@ def spherical_proj(vec, proj=0, north=3):
     >>> vec /= norm[..., np.newaxis]
     >>> xyproj0a, albeta0a, reverse0a = q4np.spherical_proj(vec, proj="stereo", north=3)
     >>> xyproj1a, albeta1a, reverse1a = q4np.spherical_proj(vec, proj="equal-area", north=3)
-    >>> xyproj0b, albeta0b, reverse0b = spherical_proj(vec, proj=0, north=3)
-    >>> xyproj1b, albeta1b, reverse1b = spherical_proj(vec, proj=1, north=3)
+    >>> xyproj0b, albeta0b, reverse0b = spherical_proj(vec, proj=0, north=3, angles=0)
+    >>> xyproj1b, albeta1b, reverse1b = spherical_proj(vec, proj=1, north=3, angles=0)
     >>> np.allclose(xyproj0a, xyproj0b, atol=1e-3)
     True
     >>> np.allclose(xyproj1a, xyproj1b, atol=1e-3)
@@ -708,7 +710,7 @@ def spherical_proj(vec, proj=0, north=3):
     for j in prange(ncrys):
         v = vec[j,:]
         # check Northern hemisphere:
-        if  v[x3] < -_EPS:
+        if  v[x3] < 0.:
             v *= -1
             reverse[j] = 1
 
@@ -722,7 +724,7 @@ def spherical_proj(vec, proj=0, north=3):
             tmp = min(tmp, 1.)
             tmp = max(tmp,-1.)
             albeta[j,1] = np.arccos(tmp)
-        if v[x2] < -_EPS:
+        if v[x2] < 0.:
             albeta[j,1] *= -1
         albeta[j,1] = albeta[j,1] % pi2
 
@@ -733,12 +735,14 @@ def spherical_proj(vec, proj=0, north=3):
         else:                # equal-area projection
             Op = np.sin(albeta[j,0]/2.)*sq2
         xyproj[j,:] *= Op
-        albeta[j,:] *= 360./pi2
+
+        if angles == 0:
+            albeta[j,:] *= 360./pi2
 
     return xyproj, albeta, reverse
 
-@njit(Tuple((float32[:,:], float32[:,:], float32[:,:], int32[:]))(float32[:,:], float32[:], float32[:,:], int32, int32), fastmath=True, parallel=True)
-def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
+@njit(Tuple((float32[:,:], float32[:,:], float32[:,:], int32[:]))(float32[:,:], float32[:], float32[:,:], uint8, uint8, uint8), fastmath=True, parallel=True)
+def q4_to_IPF(qarr, axis, qsym, proj=0, north=3, method=1):
     """
     Inverse Pole Figure projection based on crystal symmetries.
 
@@ -754,6 +758,8 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
         type of projection, 0 for stereographic or 1 for equal-area.
     north : int, default=3
         North pole defining the projection plane.
+    method : int, default=1
+        method to bring the sample vector in the elementary subspace (method 1 is faster).
 
     Returns
     -------
@@ -771,16 +777,24 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
     >>> qarr = q4np.q4_random(1024)
     >>> qsym = q4np.q4_sym_cubic()
     >>> axis = np.array([1,0,0], dtype=DTYPEf)
-    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3)
-    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=0, north=3)
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="stereo", north=3, method=1)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=0, north=3, method=1)
     >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
     True
     >>> np.allclose(RGB0, RGB1, atol=0.001)
     True
     >>> np.allclose(albeta0, albeta1, atol=0.5)
     True
-    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="equal-area", north=3)
-    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=1, north=3)
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="equal-area", north=3, method=1)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=1, north=3, method=1)
+    >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
+    True
+    >>> np.allclose(RGB0, RGB1, atol=0.001)
+    True
+    >>> np.allclose(albeta0, albeta1, atol=0.5)
+    True
+    >>> xyproj0, RGB0, albeta0, isym0 = q4np.q4_to_IPF(qarr, axis, qsym, proj="equal-area", north=3, method=2)
+    >>> xyproj1, RGB1, albeta1, isym1 = q4_to_IPF(qarr, axis, qsym, proj=1, north=3, method=2)
     >>> np.allclose(xyproj0, xyproj1, atol=1e-3)
     True
     >>> np.allclose(RGB0, RGB1, atol=0.001)
@@ -788,6 +802,15 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
     >>> np.allclose(albeta0, albeta1, atol=0.5)
     True
     """
+    if north == 1:
+        x1 = 1; x2 = 2; x3 = 0
+    elif north == 2:
+        x1 = 2; x2 = 0; x3 = 1
+    elif north == 3:
+        x1 = 0; x2 = 1; x3 = 2
+    else:
+        x1 = 0; x2 = 1; x3 = 2
+
     deg2rad = np.pi/180.
     norm = np.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2 )
     axis /= norm
@@ -808,69 +831,120 @@ def q4_to_IPF(qarr, axis, qsym, proj=0, north=3):
     else:
         sym = 'unknown'
 
-    albeta = np.zeros((ncrys,2), dtype=DTYPEf)+360
+    albeta = np.zeros((ncrys,2), dtype=DTYPEf) + 360
     xyproj = np.zeros((ncrys,2), dtype=DTYPEf)
     isym   = np.zeros(ncrys, dtype=DTYPEi)
+    _EPS = np.arccos(1. - 1./2**24) # float32 arccos precision
 
-    for iq, q in enumerate(qsym):
-        qequ = q4_mult(qarr, qsym[iq:iq+1])
-        Rsa2cr = q4_to_mat(qequ)
-        #vec = np.dot(Rsa2cr, axis)
+    if method == 1:
+        Rsa2cr = q4_to_mat(qarr)
         vec = matvec_mult(Rsa2cr, bxis)
+        if sym == 'cubic':
+            #### ensure vec(2)>=vec(0)>=vec(1)>=0 in the elementary subspace:
+            for j in prange(ncrys):
+                tmp = np.abs(vec[j,:])
+                tmp.sort()
+                vec[j,x1] = tmp[1]
+                vec[j,x2] = tmp[0]
+                vec[j,x3] = tmp[2]
+            xyproj[:,:], albeta[:,:], reverse = spherical_proj(vec, proj=proj, north=north, angles=1)
+        else:
+            xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles=1)
+            for j in prange(ncrys):
+                if sym == 'hex':
+                    alpha = albeta1[j,0]
+                    beta =  albeta1[j,1] % (np.pi/3)
+                    if (beta > np.pi/6):
+                        beta = np.pi/3 - beta
+                elif sym == 'tetra':
+                    alpha = albeta1[j,0]
+                    beta =  albeta1[j,1] % (np.pi/2)
+                    if (beta > np.pi/4):
+                        beta = np.pi/2 - beta
+                elif sym == 'ortho':
+                    alpha = albeta1[j,0]
+                    beta =  albeta1[j,1] % (np.pi)
+                    if (beta > np.pi/2):
+                        beta = np.pi - beta
+                elif sym == 'mono':
+                    alpha = albeta1[j,0]
+                    beta =  albeta1[j,1]
+                    if (beta > np.pi):
+                        beta = np.pi*2 - beta
+                else:
+                    alpha = albeta1[j,0]
+                    beta =  albeta1[j,1]
 
-        xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north)
-        for j in prange(ncrys):
-            update = False
-            if sym == 'cubic':
-                if (albeta1[j,1] < 45.+_EPS) & (albeta1[j,0] < albeta[j,0] +_EPS):
-                    update = True
-            elif sym == 'hex':
-                if (albeta1[j,1] < 30.+_EPS):
-                    update = True
-            elif sym == 'tetra':
-                if (albeta1[j,1] < 45.+_EPS):
-                    update = True
-            elif sym == 'ortho':
-                if (albeta1[j,1] < 90.+_EPS):
-                    update = True
-            elif sym == 'mono':
-                if (albeta1[j,1] < 180.+_EPS):
-                    update = True
-            else:
-                if (albeta1[j,1] > -_EPS):
-                    update = True
+                xyproj[j,0] = np.cos(beta)
+                xyproj[j,1] = np.sin(beta)
+                if proj == "stereo": # stereographic projection
+                    Op = np.tan(alpha/2.)
+                else:                # equal-area projection
+                    Op = np.sin(alpha/2.)*np.sqrt(2.)
+                xyproj[j,0] *= Op;   xyproj[j,1] *= Op
+                albeta[j,0] = alpha; albeta[j,1] = beta
+    else:
+        for iq, q in enumerate(qsym):
+            qequ = q4_mult(qarr, qsym[iq:iq+1])
+            Rsa2cr = q4_to_mat(qequ)
+            vec = matvec_mult(Rsa2cr, bxis)
 
-            if update:
-                xyproj[j,:] = xyproj1[j,:]
-                albeta[j,:] = albeta1[j,:]
-                isym[j] = iq
+            xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles=1)
+            for j in prange(ncrys):
+                update = False
+                if sym == 'cubic':
+                    alpha_max = np.arccos(np.sqrt(1./(2.+np.tan(albeta1[j,1])**2)))
+                    beta_max = np.pi/4
+                elif sym == 'hex':
+                    alpha_max = np.pi/2
+                    beta_max = np.pi/6
+                elif sym == 'tetra':
+                    alpha_max = np.pi/2
+                    beta_max = np.pi/4
+                elif sym == 'ortho':
+                    alpha_max = np.pi/2
+                    beta_max = np.pi/2
+                elif sym == 'mono':
+                    alpha_max = np.pi/2
+                    beta_max = np.pi
+                else:
+                    alpha_max = np.pi/2
+                    beta_max = np.pi*2
+
+                if (albeta1[j,0]-_EPS < alpha_max ) * (albeta1[j,1]-_EPS < beta_max):
+                    xyproj[j,:] = xyproj1[j,:]
+                    albeta[j,:] = albeta1[j,:]
+                    isym[j] = iq
 
     RGB = np.zeros((ncrys,3), dtype=DTYPEf)
     for j in prange(ncrys):
         if sym == 'cubic':
-            alpha_max = np.arccos(np.sqrt(1./(2.+np.tan(albeta[j,1]*deg2rad)**2)))/deg2rad
-            beta_max = 45.
+            alpha_max = np.arccos(np.sqrt(1./(2.+np.tan(albeta[j,1])**2)))
+            beta_max = np.pi/4
         elif sym == 'hex':
-            alpha_max = 90.
-            beta_max = 30.
+            alpha_max = np.pi/2
+            beta_max = np.pi/6
         elif sym == 'tetra':
-            alpha_max = 90.
-            beta_max = 45.
+            alpha_max = np.pi/2
+            beta_max = np.pi/4
         elif sym == 'ortho':
-            alpha_max = 90.
-            beta_max = 90.
+            alpha_max = np.pi/2
+            beta_max = np.pi/2
         elif sym == 'mono':
-            alpha_max = 90.
-            beta_max = 180.
+            alpha_max = np.pi/2
+            beta_max = np.pi
         else:
-            alpha_max = 90.
-            beta_max = 360.
+            alpha_max = np.pi/2
+            beta_max = np.pi*2
 
         RGB[j,0] =  1. - albeta[j,0]/alpha_max
         RGB[j,1] = (1. - albeta[j,1]/beta_max) * albeta[j,0]/alpha_max
         RGB[j,2] = (albeta[j,1]/beta_max)      * albeta[j,0]/alpha_max
         mx = RGB[j,:].max()
         RGB[j,:] /= mx
+
+        # finally convert albeta to degrees:
+        albeta[j,0] *= 180./np.pi; albeta[j,1] *= 180./np.pi;
 
     return xyproj, RGB, albeta, isym
 
