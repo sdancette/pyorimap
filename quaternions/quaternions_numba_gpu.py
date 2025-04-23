@@ -666,6 +666,18 @@ def spherical_proj(vec, proj, north, angles, xyproj, albeta, reverse, nthreads=2
     ----------
     vec : ndarray
         unit vectors to be projected, on GPU memory.
+    proj : int, default=0
+        type of projection, 0 for stereographic or 1 for equal-area.
+    north : int, default=3
+        North pole defining the projection plane.
+    angles : int, default=0
+        unit to return polar angles, 0 for degrees, 1 for radians.
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the equatorial plane, modified in place on GPU memory.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees or radians depending on `angles` parameter, modified in place on GPU memory.
+    reverse : ndarray
+        boolean array indicating where the input unit vectors were pointing to the Southern hemisphere and reversed, modified in place on GPU memory.
 
     Examples
     --------
@@ -698,6 +710,24 @@ def q4_to_IPF(qa, axis, qsym, proj, north, method, xyproj, RGB, albeta, isym, nt
     ----------
     qa : ndarray
         array of quaternions or single quaternion on GPU memory.
+    axis : array_like
+        sample vector (in the reference frame) to be projected in the crystal IPF triangle, on GPU memory.
+    qsym : ndarray
+        quaternion array of symmetry operations on GPU memory.
+    proj : int, default=0
+        type of projection, 0 for stereographic or 1 for equal-area.
+    north : int, default=3
+        North pole defining the projection plane.
+    method : int, default=1
+        method to bring the sample vector in the elementary subspace (method 1 is faster).
+    xyproj : ndarray
+        (ncrys, 2) array of projected coordinates in the standard triangle, modified in place on GPU memory.
+    RGB : ndarray
+        (ncrys, 3) array of RGB color code for the projection, modified in place on GPU memory.
+    albeta : ndarray
+        (ncrys, 2) array of [alpha, beta] polar angles in degrees, modified in place on GPU memory.
+    isym : ndarray
+        index of the ith equivalent orientation corresponding to the standard triangle, modified in place on GPU memory.
 
     Examples
     --------

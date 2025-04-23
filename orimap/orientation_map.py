@@ -308,7 +308,7 @@ class OriMap(pv.ImageData):
             RGB_gpu = RGB_gpu[0:1]*0.
             albeta_gpu = albeta_gpu[0:1]*0.
             isym_gpu = isym_gpu[0:1]*0.
-
+            mempool.free_all_blocks()
 
         logging.info("Finished to compute IPF projection.")
 
