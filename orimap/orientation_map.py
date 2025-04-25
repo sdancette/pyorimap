@@ -940,6 +940,69 @@ class OriMap(pv.ImageData):
                     else:
                         self.params.phase_to_crys[phi] = Crystal(phi, name='phase'+str(phi), sym='cubic')
 
+    def _export_ctf(self):
+        """
+        Export 2D map as an Oxford CTF (ascii) file.
+        """
+        filename = self.params.filename[:-4]+'.ctf'
+        CTF = open(filename, 'w')
+        CTF.write("Channel Text File\n")
+        CTF.write("Prj     noproject.cpr\n")
+        CTF.write("Author  [Unknown]\n")
+        CTF.write("JobMode Grid\n")
+        CTF.write("XCells  %d\n"%(self.dimensions[0]-1))
+        CTF.write("YCells  %d\n"%(self.dimensions[1]-1))
+        CTF.write("XStep   %f\n"%(self.spacing[0]))
+        CTF.write("YStep   %f\n"%(self.spacing[1]))
+        CTF.write("AcqE1   0\n")
+        CTF.write("AcqE2   0\n")
+        CTF.write("AcqE3   0\n")
+        CTF.write("Euler angles refer to Sample Coordinate system (CS0)! Mag 35 Coverage 100 Device 0 KV 10 TiltAngle 70 TiltAxis 0\n")
+
+        phases = sorted(list(self.params.phase_to_crys.keys()))
+        CTF.write("Phases  %d \n"%(len(phases)))
+        for phi in phases:
+            thephase = self.params.phase_to_crys[phi]
+            CTF.write("%f;%f;%f  %f;%f;%f  %s  3  0  mydata\n"%(thephase.abc[0], thephase.abc[1], thephase.abc[2], thephase.ang[0], thephase.ang[1], thephase.ang[2], thephase.name))
+
+        if self.params.dim3D:
+            CTF.write("Phase   X       Y       Z       Bands   Error   Euler1  Euler2  Euler3  MAD     BC      BS\n")
+
+            dtype = [('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'), ('Z', 'f4'),
+                    ('Bands', 'i2'), ('Error', 'i2'),
+                    ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'),
+                    ('MAD', 'f4'), ('BC', 'i2'), ('BS', 'i2')]
+            fmt = [ '%4d', '%8.4f', '%8.4f', '%8.4f',
+                    '%8.4f', '%8.4f',
+                    '%8.4f', '%8.4f', '%8.4f',
+                    '%8.4f', '%8.4f', '%8.4f']
+        else:
+            CTF.write("Phase   X       Y       Bands   Error   Euler1  Euler2  Euler3  MAD     BC      BS\n")
+
+            dtype = [('phase', 'u1'), ('X', 'f4'), ('Y', 'f4'), #('Z', 'f4'),
+                    ('Bands', 'i2'), ('Error', 'i2'),
+                    ('phi1', 'f4'), ('Phi', 'f4'), ('phi2', 'f4'),
+                    ('MAD', 'f4'), ('BC', 'i2'), ('BS', 'i2')]
+            fmt = [ '%4d', '%8.4f', '%8.4f', #'%8.4f',
+                    '%8.4f', '%8.4f',
+                    '%8.4f', '%8.4f', '%8.4f',
+                    '%8.4f', '%8.4f', '%8.4f']
+
+        xyzC = self._get_cell_coords_from_points(method=1)
+
+        ctfdata = np.zeros(len(xyzC), dtype=dtype)
+        ctfdata['phase'] = self.cell_data['phase']
+        ctfdata['X'] = xyzC[:,0]
+        ctfdata['Y'] = xyzC[:,1]
+        if self.params.dim3D:
+            ctfdata['Z'] = xyzC[:,2]
+        ctfdata['phi1'] = self.cell_data['eul'][:,0]
+        ctfdata['Phi'] = self.cell_data['eul'][:,1]
+        ctfdata['phi2'] = self.cell_data['eul'][:,2]
+
+        np.savetxt(CTF, ctfdata, fmt=fmt)
+        CTF.close()
+
 def read_from_ctf(filename, dtype=None):
     """
     Read a ascii .ctf file and return an OriMap object
