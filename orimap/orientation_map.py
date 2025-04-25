@@ -30,6 +30,8 @@ from numpy.lib.recfunctions import structured_to_unstructured, unstructured_to_s
 from numba import njit, prange, int8, int32, float32
 from numba.types import Tuple as nTuple
 
+import h5py
+
 #logging.basicConfig(filename='orimap.log', level=logging.INFO, format='%(asctime)s %(message)s')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -920,7 +922,7 @@ class OriMap(pv.ImageData):
                     logging.error("Phase IDs do not match in cell_data['phase'] and {}: {}, {}".format(f, thephases, phases.phase))
             except FileNotFoundError:
                 readPhase = False
-                logging.error("Failed to read .phi phase file {}.".format(filename))
+                logging.error("Failed to read .phi phase file for {}.".format(self.params.filename))
 
             #self.phase_to_crys = dict()
             if readPhase:
@@ -930,10 +932,13 @@ class OriMap(pv.ImageData):
                                                             abc=np.array([phi.a,phi.b,phi.c,]),
                                                             ang=np.array([phi.alpha,phi.beta,phi.gamma,]))
             else:
-                logging.warning("Assuming cubic symmetry for all phases ({}).".format(thephases))
+                logging.warning("Assuming cubic symmetry for all non-zero phases ({}).".format(thephases))
                 self.params.phases = list(thephases)
                 for phi in thephases:
-                    self.params.phase_to_crys[phi] = Crystal(phi, name='phase'+str(phi), sym='cubic')
+                    if phi == 0:
+                        self.params.phase_to_crys[phi] = Crystal(0, name='unindexed', abc=np.zeros(3)*np.nan, ang=np.zeros(3)*np.nan)
+                    else:
+                        self.params.phase_to_crys[phi] = Crystal(phi, name='phase'+str(phi), sym='cubic')
 
 def read_from_ctf(filename, dtype=None):
     """
@@ -1035,6 +1040,64 @@ def read_from_ctf(filename, dtype=None):
     orimap.cell_data['BS'] = ctfdata['BS']
     orimap.cell_data['eul'] = structured_to_unstructured(ctfdata[['phi1', 'Phi', 'phi2']])
     orimap.qarray = q4np.q4_from_eul(orimap.cell_data['eul'])
+
+    fvtk = filename[:-4]+'.vtk'
+    logging.info("Saving vtk file: {}".format(fvtk))
+    orimap.save(fvtk)
+    orimap._save_phase_info()
+
+    return orimap
+
+def read_from_DCT_mat(filename, rodriKey='dmvol', grainKey='grains', phaseKey='phases'):
+    """
+    Read an HDF5 (.mat) DCT file and return an OriMap object
+    with data stored at the cell centers.
+    """
+    logging.info("Reading DCT file {}.".format(filename))
+
+    DCTvol = h5py.File(filename, 'r')
+    logging.info("HDF5 file keys: {}.".format(DCTvol.keys()))
+
+    #DCTgrains = DCTvol.get('vol')
+    DCTgrains = DCTvol.get(grainKey)[:,:,:]
+    volshape = DCTgrains.shape
+    DCTrodri =  DCTvol.get(rodriKey)[:,:,:,:]
+    if not phaseKey is None:
+        DCTphase =  DCTvol.get(phaseKey)[:,:,:]
+    else:
+        DCTphase = np.zeros(volshape, dtype=np.uint8)
+        DCTphase[DCTgrains > 0] = 1
+
+    # Reshape arrays:
+    DCTgrains = DCTgrains.reshape(-1)
+    DCTgrains = DCTgrains.astype(DTYPEi)
+    DCTrodri = np.moveaxis(DCTrodri, 0, -1) # 3 components of Rodrigues vector as the last axis instead of the first
+    DCTrodri = DCTrodri.reshape(-1,3)
+    DCTrodri =  DCTrodri.astype(DTYPEf)
+    DCTphase = DCTphase.reshape(-1)
+    DCTphase = DCTphase.astype(np.uint8)
+    thephases = np.unique(DCTphase)
+
+    # pyvista Image object:
+    logging.info("Generating pyvista ImageData object.")
+
+    selem = StructuringElement()
+    selem.set_selem(radius=1, connectivity='face', dim=3)
+    params = OriMapParameters(filename=filename,
+                              dimensions=(volshape[2]+1, volshape[1]+1, volshape[0]+1),
+                              spacing=(1, 1, 1),
+                              phases=list(thephases),
+                              selem=selem,
+                              dim3D=True)
+
+    orimap = OriMap(None, params)
+
+    orimap.cell_data['grain_DCT'] = DCTgrains
+    orimap.cell_data['phase'] = DCTphase
+    orimap.cell_data['Rodri'] = DCTrodri
+    orimap.qarray = q4np.q4_from_rodri(DCTrodri)
+
+    orimap._read_phase_info()
 
     fvtk = filename[:-4]+'.vtk'
     logging.info("Saving vtk file: {}".format(fvtk))

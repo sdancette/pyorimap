@@ -162,7 +162,6 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
     logging.info("Starting to compute KDTree.")
     tree = KDTree(seeds)
     dist, grains = tree.query(xyzCells)
-    grid.cell_data['grain'] = grains.astype(DTYPEi) + 1
     logging.info("Finished to compute KDTree.")
 
     grid.cell_data['phase'] = np.ones(grid.n_cells, dtype=np.uint8)
@@ -192,6 +191,7 @@ def Voronoi_microstructure(dimensions=(128,128,128), spacing=1, ngrains=5**3, ph
         newu = np.arange(ngrains)
         grains = newu[rindices]
         unic = newu
+    grid.cell_data['grain_Voro'] = grains.astype(DTYPEi) + 1
 
     qseeds = q4np.q4_random(ngrains)
     eulseeds = q4np.q4_to_eul(qseeds)

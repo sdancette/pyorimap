@@ -907,6 +907,50 @@ def transpose_mat(R):
 
     return Rt
 
+def q4_from_rodri(rodri, dtype=DTYPEf):
+    """
+    Converts Rodrigues vector to the corresponding quaternion.
+
+    Parameters
+    ----------
+    rodri : array_like
+        (ncrys, 3) array of Rodrigues vectors.
+
+    Returns
+    -------
+    qarr : ndarray
+        quaternion array of shape (ncrys, 4) and type np.float32 by default.
+
+    Notes
+    -----
+    The magnitude of the Rodrigues vector sets the rotation angle while its direction sets the rotation axis.
+
+    Examples
+    --------
+    >>> qarr = q4_random(n=1024)
+    """
+    rodri = np.atleast_2d(rodri).astype(dtype)
+    ncrys = len(rodri)
+    qarr = np.zeros((ncrys,4), dtype=dtype)
+    axis = np.zeros((ncrys,3), dtype=dtype)
+    axis[:,0] = 1.
+
+    norm = np.sqrt(np.sum(rodri**2, axis=1))
+    halfangles = np.arctan(norm)
+
+    whr = (norm > _EPS)
+    norm = norm[whr]
+    axis[whr,:] = rodri[whr,:] / norm[..., np.newaxis]
+
+    qarr[:,0] = np.cos(halfangles)
+    sintheta =   np.sin(halfangles)
+    qarr[:,1:] = axis * sintheta[..., np.newaxis]
+
+    # positive quaternion:
+    qarr = q4_positive(qarr)
+
+    return np.squeeze(qarr)
+
 def q4_angle(qa, qb, dtype=DTYPEf):
     """
     Returns the angle (degrees) between quaternions `qa` and `qb`.
