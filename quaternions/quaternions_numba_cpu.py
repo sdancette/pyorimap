@@ -583,13 +583,13 @@ def matvec_mult(A, b):
     --------
     >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
     >>> b = np.random.rand(3).astype(DTYPEf)
-    >>> C1 = np.matvec(A,b)
+    >>> C1 = np.einsum('...ij,...j->...i', A, b) # np.matvec(A,b) starting from numpy 2.2.0
     >>> C2 = matvec_mult(A, np.atleast_2d(b))
     >>> np.allclose(C1, C2, atol=1e-6)
     True
     >>> A = np.random.rand(1024,3,3).astype(DTYPEf)
     >>> b = np.random.rand(1024,3).astype(DTYPEf)
-    >>> C1 = np.matvec(A,b)
+    >>> C1 = np.einsum('...ij,...j->...i', A, b)
     >>> C2 = matvec_mult(A,b)
     >>> np.allclose(C1, C2, atol=1e-6)
     True

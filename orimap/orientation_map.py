@@ -355,7 +355,7 @@ class OriMap(pv.ImageData):
 
         for ineb in range(self.params.selem.nneb):
             desoNeb = self.deso[:,ineb]
-            theNeb = self.neighbors[:,ineb]
+            theNeb =  self.neighbors[:,ineb]
             graNeb = grains[theNeb]
             whrSameGr = (grains == graNeb) * (theNeb >= 0)
 

@@ -467,7 +467,7 @@ def matvec_mult(A, b, c, nthreads=256):
     --------
     >>> A = np.random.rand(1024, 3,3).astype(DTYPEf)
     >>> b = np.random.rand(1024, 3).astype(DTYPEf)
-    >>> c = np.matvec(A,b)
+    >>> c = np.einsum('...ij,...j->...i', A, b) # np.matvec(A,b)
     >>> AGPU = cp.asarray(A)
     >>> bGPU = cp.asarray(b)
     >>> cGPU = cp.zeros_like(c)

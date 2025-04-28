@@ -1695,8 +1695,8 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, m
 
     if method == 1:
         Rsa2cr = q4_to_mat(qarr)
-        #vec = np.dot(Rsa2cr, axis).astype(dtype)
-        vec = np.matvec(Rsa2cr, axis, dtype=dtype)
+        #vec = np.matvec(Rsa2cr, axis, dtype=dtype) # np.matvec starting from numpy 2.2.0
+        vec = np.dot(Rsa2cr, axis).astype(dtype)
         vec = np.atleast_2d(vec)
         #### bring projection into the elementary subspace for the RGB color code:
         if sym == 'cubic':
@@ -1747,8 +1747,8 @@ def q4_to_IPF(qarr, axis=[1,0,0], qsym=q4_sym_cubic(), proj="stereo", north=3, m
         for iq, q in enumerate(qsym):
             qequ = q4_mult(qarr, q)
             Rsa2cr = q4_to_mat(qequ)
-            vec = np.matvec(Rsa2cr, axis, dtype=dtype)
-            #vec = np.dot(Rsa2cr, axis).astype(dtype)
+            #vec = np.matvec(Rsa2cr, axis, dtype=dtype) # np.matvec starting from numpy 2.2.0
+            vec = np.dot(Rsa2cr, axis).astype(dtype)
 
             xyproj1, albeta1, reverse = spherical_proj(vec, proj=proj, north=north, angles='rad', dtype=dtype)
 
